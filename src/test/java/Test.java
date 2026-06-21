@@ -4,35 +4,55 @@ public class Test
 {
     public static void main(String[] args)
     {
-        TargetClass target = new TargetClass(13, "sample");
+        TargetClass original = new TargetClass(13, "original");
+        TargetClass virtualized = new TargetClass(13, "virtualized");
 
-        check("add(19, 23)", 42, target.add(19, 23));
-        check("mix(7, 11)", (7 * 31 + 11) ^ 0x5A5A, target.mix(7, 11));
-        check("absolute(-91)", 91, target.absolute(-91));
-        check("absolute(37)", 37, target.absolute(37));
-        check("clamp(-4, 0, 10)", 0, target.clamp(-4, 0, 10));
-        check("clamp(7, 0, 10)", 7, target.clamp(7, 0, 10));
-        check("clamp(18, 0, 10)", 10, target.clamp(18, 0, 10));
-        check("sumTo(10)", 55, target.sumTo(10));
-        check("scramble(12345)", scramble(12345), target.scramble(12345));
-        check("mixWithSeed(9)", 9 * 31 + 13, target.mixWithSeed(9));
+        check("add", original.originalAdd(19, 23), virtualized.add(19, 23));
+        check("mix", original.originalMix(7, 11), virtualized.mix(7, 11));
+        check("absolute negative", original.originalAbsolute(-91), virtualized.absolute(-91));
+        check("absolute positive", original.originalAbsolute(37), virtualized.absolute(37));
+        check("clamp low", original.originalClamp(-4, 0, 10), virtualized.clamp(-4, 0, 10));
+        check("clamp middle", original.originalClamp(7, 0, 10), virtualized.clamp(7, 0, 10));
+        check("clamp high", original.originalClamp(18, 0, 10), virtualized.clamp(18, 0, 10));
+        check("sumTo", original.originalSumTo(10), virtualized.sumTo(10));
+        check("scramble", original.originalScramble(12345), virtualized.scramble(12345));
+        check("mixWithSeed", original.originalMixWithSeed(9), virtualized.mixWithSeed(9));
 
-        System.out.println("state     : " + target.describe());
-        System.out.println("instances : " + TargetClass.createdInstances());
-        System.out.println("magic     : 0x" + Integer.toHexString(TargetClass.magic()));
-    }
+        check("GETFIELD seed", original.originalAddSeed(29), virtualized.addSeed(29));
+        check(
+                "GETFIELD/PUTFIELD counter #1",
+                original.originalIncrementCounter(5),
+                virtualized.incrementCounter(5));
+        check(
+                "GETFIELD/PUTFIELD counter #2",
+                original.originalIncrementCounter(8),
+                virtualized.incrementCounter(8));
 
-    private static int scramble(int value)
-    {
-        return ((value << 5) ^ (value >>> 3)) * 0x045D9F3B;
+        TargetClass.resetGlobal();
+        int originalGlobal = original.originalAddGlobal(21);
+        TargetClass.resetGlobal();
+        check("GETSTATIC/PUTSTATIC global", originalGlobal, virtualized.addGlobal(21));
+
+        check(
+                "INVOKEVIRTUAL private helper",
+                original.originalCallHelper(14),
+                virtualized.callHelper(14));
+        check(
+                "INVOKESTATIC private rotate",
+                original.originalCallStatic(0x12345678),
+                virtualized.callStatic(0x12345678));
+
+        System.out.println("original state   : " + original.describe());
+        System.out.println("virtualized state: " + virtualized.describe());
+        System.out.println("instances        : " + TargetClass.createdInstances());
     }
 
     private static void check(String method, int expected, int actual)
     {
         System.out.println("=== " + method + " ===");
-        System.out.println("expected : " + expected);
-        System.out.println("actual   : " + actual);
-        System.out.println("success  : " + (expected == actual));
+        System.out.println("original result   : " + expected);
+        System.out.println("virtualized result: " + actual);
+        System.out.println("same              : " + (expected == actual));
         System.out.println();
 
         if (expected != actual)
