@@ -3,6 +3,7 @@ package nhcm.bytecodevm.Utils;
 import java.security.SecureRandom;
 import java.util.Collections;
 import java.util.List;
+import java.util.concurrent.ThreadLocalRandom;
 
 public class RandomUtils
 {
@@ -36,6 +37,11 @@ public class RandomUtils
         }
 
         return RANDOM.nextInt(max - min + 1) + min;
+    }
+
+    public static boolean randomBoolean()
+    {
+        return ThreadLocalRandom.current().nextBoolean();
     }
 
     public static <T> void shuffle(List<T> list)

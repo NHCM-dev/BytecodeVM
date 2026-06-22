@@ -1,9 +1,6 @@
 package nhcm.bytecodevm.Tools;
 
-import nhcm.bytecodevm.Data.VMMethod;
-import nhcm.bytecodevm.Data.VMConstantDynamic;
-import nhcm.bytecodevm.Data.VMHandle;
-import nhcm.bytecodevm.Data.VMType;
+import nhcm.bytecodevm.Data.VMInsn.VMMethod;
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Utils.Collection.IntArrayBuilder;
 import org.objectweb.asm.ConstantDynamic;
@@ -147,7 +144,7 @@ public class VMMethodCompiler
         {
             code.add(addConstant(constants, dynamicInsn.name));
             code.add(addConstant(constants, dynamicInsn.desc));
-            code.add(addConstant(constants, convertHandle(dynamicInsn.bsm)));
+            code.add(addConstant(constants, dynamicInsn.bsm));
             code.add(dynamicInsn.bsmArgs.length);
 
             for (Object argument : dynamicInsn.bsmArgs)
@@ -208,28 +205,17 @@ public class VMMethodCompiler
     {
         if (constant instanceof Type)
         {
-            return new VMType(((Type) constant).getDescriptor());
+            return constant;
         }
 
         if (constant instanceof Handle)
         {
-            return convertHandle((Handle) constant);
+            return constant;
         }
 
-        if (constant instanceof ConstantDynamic dynamic)
+        if (constant instanceof ConstantDynamic)
         {
-            Object[] arguments = new Object[dynamic.getBootstrapMethodArgumentCount()];
-
-            for (int index = 0; index < arguments.length; index++)
-            {
-                arguments[index] = convertConstant(dynamic.getBootstrapMethodArgument(index));
-            }
-
-            return new VMConstantDynamic(
-                    dynamic.getName(),
-                    dynamic.getDescriptor(),
-                    convertHandle(dynamic.getBootstrapMethod()),
-                    arguments);
+            return constant;
         }
 
         if (constant instanceof Integer || constant instanceof Long ||
@@ -242,16 +228,6 @@ public class VMMethodCompiler
         throw new IllegalArgumentException(
                 "Unsupported constant type: " +
                         (constant == null ? "null" : constant.getClass().getName()));
-    }
-
-    private static VMHandle convertHandle(Handle handle)
-    {
-        return new VMHandle(
-                handle.getTag(),
-                handle.getOwner(),
-                handle.getName(),
-                handle.getDesc(),
-                handle.isInterface());
     }
 
     private static int addConstant(List<Object> constants, Object constant)

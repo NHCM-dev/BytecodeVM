@@ -1,4 +1,4 @@
-package nhcm.bytecodevm.Data;
+package nhcm.bytecodevm.Data.VMInsn;
 
 public class VMOperand
 {

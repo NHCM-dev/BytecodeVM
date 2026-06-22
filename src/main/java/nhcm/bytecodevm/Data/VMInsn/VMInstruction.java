@@ -1,4 +1,4 @@
-package nhcm.bytecodevm.Data;
+package nhcm.bytecodevm.Data.VMInsn;
 
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Enums.VMOpcode;
@@ -15,7 +15,7 @@ public class VMInstruction
     public final VMOpcode operation;
     public final List<VMOperand> operands;
 
-    VMInstruction(
+    protected VMInstruction(
             int programCounter,
             int nextProgramCounter,
             int mutatedOpcode,

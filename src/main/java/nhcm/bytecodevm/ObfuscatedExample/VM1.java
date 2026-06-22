@@ -3,14 +3,21 @@ package nhcm.bytecodevm.ObfuscatedExample;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-final class VM1
+public final class VM1
 {
+    private static final List<VMCodePool> CODE_POOLS = Arrays.asList(
+            CodePool.INSTANCE,
+            CodePool2.INSTANCE);
     private static final Map<String, MethodHandle> FIELD_HANDLES = new ConcurrentHashMap<>();
     private static final Map<String, MethodHandle> METHOD_HANDLES = new ConcurrentHashMap<>();
 
@@ -18,107 +25,189 @@ final class VM1
     {
     }
 
-    static int executeInt(int codeId, Object receiver, Object[] arguments)
+    @SuppressWarnings("unchecked")
+    public static <T> T execute(int codeId, Object receiver, Object... arguments)
     {
+        VMProgram program = resolve(codeId);
         MethodFrame frame = new MethodFrame(
-                CodePool.maxLocals(codeId),
-                CodePool.maxStack(codeId));
+                program.maxLocals(),
+                program.maxStack());
 
-        frame.locals[0] = receiver;
-        System.arraycopy(arguments, 0, frame.locals, 1, arguments.length);
-        execute(codeId, frame);
-        return (Integer) frame.returnValue;
+        int argumentOffset = 0;
+        if (receiver != null)
+        {
+            frame.locals[0] = receiver;
+            argumentOffset = 1;
+        }
+        System.arraycopy(arguments, 0, frame.locals, argumentOffset, arguments.length);
+        interpret(program, frame);
+        return (T) frame.returnValue;
     }
 
-    private static void execute(int codeId, MethodFrame frame)
+    private static VMProgram resolve(int codeId)
     {
-        int[] encodedCode = CodePool.encodedCode(codeId);
-        Object[] constants = CodePool.constants(codeId);
+        VMProgram resolved = null;
+        for (VMCodePool codePool : CODE_POOLS)
+        {
+            VMProgram candidate = codePool.find(codeId);
+            if (candidate == null) continue;
+            if (resolved != null)
+            {
+                throw new IllegalStateException("Duplicate code id: " + codeId);
+            }
+            resolved = candidate;
+        }
+        if (resolved == null)
+        {
+            throw new IllegalArgumentException("Unknown code id: " + codeId);
+        }
+        return resolved;
+    }
+
+    private static void interpret(VMProgram program, MethodFrame frame)
+    {
+        int[] code = program.code();
+        Object[] constants = program.constants();
 
         while (!frame.returned)
         {
-            // programCounter addresses every token, including opcode and operands.
-            int opcode = nextToken(encodedCode, codeId, frame);
+            int opcode = nextToken(code, frame);
 
             switch (opcode)
             {
-                case CodePool.ALOAD, CodePool.ILOAD -> {
-                    int localIndex = nextToken(encodedCode, codeId, frame);
+                case -1062458953:
+                case 1779033703:
+                {
+                    int localIndex = nextToken(code, frame);
                     frame.push(frame.locals[localIndex]);
+                    break;
                 }
 
-                case CodePool.ISTORE -> {
-                    int localIndex = nextToken(encodedCode, codeId, frame);
+                case -1150833019:
+                {
+                    int localIndex = nextToken(code, frame);
                     frame.locals[localIndex] = frame.pop();
+                    break;
                 }
 
-                case CodePool.ICONST_0 -> frame.push(0);
-                case CodePool.ICONST_1 -> frame.push(1);
-                case CodePool.ICONST_3 -> frame.push(3);
-                case CodePool.ICONST_5 -> frame.push(5);
-                case CodePool.BIPUSH, CodePool.SIPUSH -> frame.push(
-                        nextToken(encodedCode, codeId, frame));
+                case 608135816: frame.push(0); break;
+                case -2052912941: frame.push(1); break;
+                case 320440878: frame.push(3); break;
+                case 57701188: frame.push(5); break;
+                case 1013904242:
+                case -1542899678:
+                    frame.push(nextToken(code, frame));
+                    break;
 
-                case CodePool.LDC -> {
-                    int constantIndex = nextToken(encodedCode, codeId, frame);
+                case 698298832:
+                {
+                    int constantIndex = nextToken(code, frame);
                     frame.push(constants[constantIndex]);
+                    break;
                 }
 
-                case CodePool.IADD -> binaryInt(frame, (left, right) -> left + right);
-                case CodePool.IMUL -> binaryInt(frame, (left, right) -> left * right);
-                case CodePool.IXOR -> binaryInt(frame, (left, right) -> left ^ right);
-                case CodePool.INEG -> frame.push(-frame.popInt());
-                case CodePool.ISHL -> binaryInt(frame, (value, distance) -> value << distance);
-                case CodePool.IUSHR -> binaryInt(frame, (value, distance) -> value >>> distance);
-
-                case CodePool.IFGE -> {
-                    int target = nextToken(encodedCode, codeId, frame);
-                    if (frame.popInt() >= 0) frame.programCounter = target;
+                case -1521486534:
+                {
+                    int right = (int) frame.pop();
+                    int left = (int) frame.pop();
+                    frame.push(left + right);
+                    break;
+                }
+                case -1694144372:
+                {
+                    int right = (int) frame.pop();
+                    int left = (int) frame.pop();
+                    frame.push(left * right);
+                    break;
+                }
+                case 528734635:
+                {
+                    int right = (int) frame.pop();
+                    int left = (int) frame.pop();
+                    frame.push(left ^ right);
+                    break;
+                }
+                case 1541459225:
+                    frame.push(-(int) frame.pop());
+                    break;
+                case 310598401:
+                {
+                    int distance = (int) frame.pop();
+                    int value = (int) frame.pop();
+                    frame.push(value << distance);
+                    break;
+                }
+                case 607225278:
+                {
+                    int distance = (int) frame.pop();
+                    int value = (int) frame.pop();
+                    frame.push(value >>> distance);
+                    break;
                 }
 
-                case CodePool.IF_ICMPLT -> {
-                    int target = nextToken(encodedCode, codeId, frame);
-                    int right = frame.popInt();
-                    int left = frame.popInt();
+                case -876896931:
+                {
+                    int target = nextToken(code, frame);
+                    if ((int) frame.pop() >= 0) frame.programCounter = target;
+                    break;
+                }
+
+                case 1426881987:
+                {
+                    int target = nextToken(code, frame);
+                    int right = (int) frame.pop();
+                    int left = (int) frame.pop();
                     if (left < right) frame.programCounter = target;
+                    break;
                 }
 
-                case CodePool.IF_ICMPGT -> {
-                    int target = nextToken(encodedCode, codeId, frame);
-                    int right = frame.popInt();
-                    int left = frame.popInt();
+                case 1925078388:
+                {
+                    int target = nextToken(code, frame);
+                    int right = (int) frame.pop();
+                    int left = (int) frame.pop();
                     if (left > right) frame.programCounter = target;
+                    break;
                 }
 
-                case CodePool.GOTO -> frame.programCounter =
-                        nextToken(encodedCode, codeId, frame);
+                case -2132889090:
+                    frame.programCounter = nextToken(code, frame);
+                    break;
 
-                case CodePool.GETFIELD, CodePool.GETSTATIC -> {
-                    String owner = constantString(constants, nextToken(encodedCode, codeId, frame));
-                    String name = constantString(constants, nextToken(encodedCode, codeId, frame));
-                    String descriptor = constantString(constants, nextToken(encodedCode, codeId, frame));
-                    boolean isStatic = opcode == CodePool.GETSTATIC;
+                case -559038737:
+                case 253635900:
+                {
+                    String owner = constantString(constants, nextToken(code, frame));
+                    String name = constantString(constants, nextToken(code, frame));
+                    String descriptor = constantString(constants, nextToken(code, frame));
+                    boolean isStatic = opcode == 253635900;
                     Object receiver = isStatic ? null : frame.pop();
                     frame.push(getField(owner, name, descriptor, isStatic, receiver));
+                    break;
                 }
 
-                case CodePool.PUTFIELD, CodePool.PUTSTATIC -> {
-                    String owner = constantString(constants, nextToken(encodedCode, codeId, frame));
-                    String name = constantString(constants, nextToken(encodedCode, codeId, frame));
-                    String descriptor = constantString(constants, nextToken(encodedCode, codeId, frame));
-                    boolean isStatic = opcode == CodePool.PUTSTATIC;
+                case -889275714:
+                case -1985229329:
+                {
+                    String owner = constantString(constants, nextToken(code, frame));
+                    String name = constantString(constants, nextToken(code, frame));
+                    String descriptor = constantString(constants, nextToken(code, frame));
+                    boolean isStatic = opcode == -1985229329;
                     Object value = frame.pop();
                     Object receiver = isStatic ? null : frame.pop();
                     setField(owner, name, descriptor, isStatic, receiver, value);
+                    break;
                 }
 
-                case CodePool.INVOKEVIRTUAL, CodePool.INVOKESTATIC -> {
-                    String owner = constantString(constants, nextToken(encodedCode, codeId, frame));
-                    String name = constantString(constants, nextToken(encodedCode, codeId, frame));
-                    String descriptor = constantString(constants, nextToken(encodedCode, codeId, frame));
-                    nextToken(encodedCode, codeId, frame); // MethodInsnNode.itf
+                case 270544960:
+                case 540033104:
+                {
+                    String owner = constantString(constants, nextToken(code, frame));
+                    String name = constantString(constants, nextToken(code, frame));
+                    String descriptor = constantString(constants, nextToken(code, frame));
+                    nextToken(code, frame); // MethodInsnNode.itf
 
-                    boolean isStatic = opcode == CodePool.INVOKESTATIC;
+                    boolean isStatic = opcode == 540033104;
                     MethodType type = MethodType.fromMethodDescriptorString(
                             descriptor,
                             VM1.class.getClassLoader());
@@ -136,35 +225,30 @@ final class VM1
                             receiver,
                             invocationArguments);
                     if (type.returnType() != void.class) frame.push(result);
+                    break;
                 }
 
-                case CodePool.IRETURN -> {
-                    frame.returnValue = frame.popInt();
+                case 1654270250:
+                    frame.returnValue = frame.pop();
                     frame.returned = true;
-                }
+                    break;
 
-                default -> throw new IllegalStateException(
-                        "Unknown VM opcode " + Integer.toHexString(opcode) +
-                                " at pc " + (frame.programCounter - 1));
+                default:
+                    throw new IllegalStateException(
+                            "Unknown VM opcode " + Integer.toHexString(opcode) +
+                                    " at pc " + (frame.programCounter - 1));
             }
         }
     }
 
-    private static int nextToken(int[] encodedCode, int codeId, MethodFrame frame)
+    private static int nextToken(int[] code, MethodFrame frame)
     {
-        return CodePool.decodeToken(encodedCode, codeId, frame.programCounter++);
+        return code[frame.programCounter++];
     }
 
     private static String constantString(Object[] constants, int index)
     {
         return (String) constants[index];
-    }
-
-    private static void binaryInt(MethodFrame frame, IntBinary operation)
-    {
-        int right = frame.popInt();
-        int left = frame.popInt();
-        frame.push(operation.apply(left, right));
     }
 
     private static Object getField(
@@ -177,7 +261,9 @@ final class VM1
         try
         {
             return fieldHandle(owner, name, descriptor, isStatic, false)
-                    .invokeWithArguments(isStatic ? List.of() : List.of(receiver));
+                    .invokeWithArguments(isStatic
+                            ? Collections.emptyList()
+                            : Collections.singletonList(receiver));
         }
         catch (Throwable throwable)
         {
@@ -196,8 +282,8 @@ final class VM1
         try
         {
             List<Object> arguments = isStatic
-                    ? List.of(value)
-                    : List.of(receiver, value);
+                    ? Collections.singletonList(value)
+                    : Arrays.asList(receiver, value);
             fieldHandle(owner, name, descriptor, isStatic, true)
                     .invokeWithArguments(arguments);
         }
@@ -222,19 +308,17 @@ final class VM1
                 Class<?> fieldType = MethodType.fromMethodDescriptorString(
                         "()" + descriptor,
                         ownerClass.getClassLoader()).returnType();
-                MethodHandles.Lookup lookup = MethodHandles.privateLookupIn(
-                        ownerClass,
-                        MethodHandles.lookup());
-
-                if (isStatic)
+                Field field = ownerClass.getDeclaredField(name);
+                field.setAccessible(true);
+                if (field.getType() != fieldType ||
+                        Modifier.isStatic(field.getModifiers()) != isStatic)
                 {
-                    return setter
-                            ? lookup.findStaticSetter(ownerClass, name, fieldType)
-                            : lookup.findStaticGetter(ownerClass, name, fieldType);
+                    throw new NoSuchFieldException(ownerClass.getName() + '.' + name);
                 }
+                MethodHandles.Lookup lookup = MethodHandles.lookup();
                 return setter
-                        ? lookup.findSetter(ownerClass, name, fieldType)
-                        : lookup.findGetter(ownerClass, name, fieldType);
+                        ? lookup.unreflectSetter(field)
+                        : lookup.unreflectGetter(field);
             }
             catch (ReflectiveOperationException exception)
             {
@@ -256,12 +340,14 @@ final class VM1
             try
             {
                 Class<?> ownerClass = loadOwner(owner);
-                MethodHandles.Lookup lookup = MethodHandles.privateLookupIn(
-                        ownerClass,
-                        MethodHandles.lookup());
-                return isStatic
-                        ? lookup.findStatic(ownerClass, name, type)
-                        : lookup.findVirtual(ownerClass, name, type);
+                Method target = ownerClass.getDeclaredMethod(name, type.parameterArray());
+                target.setAccessible(true);
+                if (target.getReturnType() != type.returnType() ||
+                        Modifier.isStatic(target.getModifiers()) != isStatic)
+                {
+                    throw new NoSuchMethodException(ownerClass.getName() + '.' + name + type);
+                }
+                return MethodHandles.lookup().unreflect(target);
             }
             catch (ReflectiveOperationException exception)
             {
@@ -299,14 +385,9 @@ final class VM1
 
     private static RuntimeException rethrow(Throwable throwable)
     {
-        if (throwable instanceof RuntimeException runtime) return runtime;
-        if (throwable instanceof Error error) throw error;
+        if (throwable instanceof RuntimeException) return (RuntimeException) throwable;
+        if (throwable instanceof Error) throw (Error) throwable;
         return new IllegalStateException(throwable);
     }
 
-    @FunctionalInterface
-    private interface IntBinary
-    {
-        int apply(int left, int right);
-    }
 }

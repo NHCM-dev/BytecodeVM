@@ -130,8 +130,6 @@ public enum Opcs
     IF_ACMPEQ(Opcodes.IF_ACMPEQ, true),
     IF_ACMPNE(Opcodes.IF_ACMPNE, true),
     GOTO(Opcodes.GOTO, true),
-    JSR(Opcodes.JSR, true),
-    RET(Opcodes.RET, true),
     TABLESWITCH(Opcodes.TABLESWITCH, OperandFormat.TABLE_SWITCH),
     LOOKUPSWITCH(Opcodes.LOOKUPSWITCH, OperandFormat.LOOKUP_SWITCH),
     IRETURN(Opcodes.IRETURN, false),

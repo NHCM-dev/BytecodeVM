@@ -1,4 +1,4 @@
-package nhcm.bytecodevm.Data;
+package nhcm.bytecodevm.Data.VMInsn;
 
 import nhcm.bytecodevm.Tools.OpcMutator;
 import nhcm.bytecodevm.Enums.Opcs;

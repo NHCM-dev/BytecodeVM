@@ -31,7 +31,7 @@ public class TargetClass
     public int add(int a, int b)
     {
         calls++;
-        return VM1.executeInt(CodePool.ADD_METHOD, this, new Object[]{a, b});
+        return VM1.execute(0x13572468, this, a, b);
     }
 
     public int originalMix(int a, int b)
@@ -42,7 +42,7 @@ public class TargetClass
     public int mix(int a, int b)
     {
         calls++;
-        return VM1.executeInt(CodePool.MIX_METHOD, this, new Object[]{a, b});
+        return VM1.execute(0x6C8E9CF1, this, a, b);
     }
 
     public int originalAbsolute(int value)
@@ -53,7 +53,7 @@ public class TargetClass
     public int absolute(int value)
     {
         calls++;
-        return VM1.executeInt(CodePool.ABSOLUTE_METHOD, this, new Object[]{value});
+        return VM1.execute(0x24681357, this, value);
     }
 
     public int originalClamp(int value, int min, int max)
@@ -66,10 +66,10 @@ public class TargetClass
     public int clamp(int value, int min, int max)
     {
         calls++;
-        return VM1.executeInt(
-                CodePool.CLAMP_METHOD,
+        return VM1.execute(
+                0x55AA11EE,
                 this,
-                new Object[]{value, min, max});
+                value, min, max);
     }
 
     public int originalSumTo(int limit)
@@ -82,7 +82,7 @@ public class TargetClass
     public int sumTo(int limit)
     {
         calls++;
-        return VM1.executeInt(CodePool.SUM_TO_METHOD, this, new Object[]{limit});
+        return VM1.execute(0x10293847, this, limit);
     }
 
     public int originalScramble(int value)
@@ -93,7 +93,7 @@ public class TargetClass
     public int scramble(int value)
     {
         calls++;
-        return VM1.executeInt(CodePool.SCRAMBLE_METHOD, this, new Object[]{value});
+        return VM1.execute(0x7F4A2C19, this, value);
     }
 
     public int originalMixWithSeed(int value)
@@ -104,10 +104,10 @@ public class TargetClass
     public int mixWithSeed(int value)
     {
         calls++;
-        return VM1.executeInt(
-                CodePool.MIX_WITH_SEED_METHOD,
+        return VM1.execute(
+                0x31415926,
                 this,
-                new Object[]{value, seed});
+                value, seed);
     }
 
     public int originalAddSeed(int value)
@@ -118,7 +118,7 @@ public class TargetClass
     public int addSeed(int value)
     {
         calls++;
-        return VM1.executeInt(CodePool.ADD_SEED_METHOD, this, new Object[]{value});
+        return VM1.execute(0x0BADB002, this, value);
     }
 
     public int originalIncrementCounter(int amount)
@@ -130,10 +130,10 @@ public class TargetClass
     public int incrementCounter(int amount)
     {
         calls++;
-        return VM1.executeInt(
-                CodePool.INCREMENT_COUNTER_METHOD,
+        return VM1.execute(
+                0x5EED1234,
                 this,
-                new Object[]{amount});
+                amount);
     }
 
     public int originalAddGlobal(int amount)
@@ -145,7 +145,7 @@ public class TargetClass
     public int addGlobal(int amount)
     {
         calls++;
-        return VM1.executeInt(CodePool.ADD_GLOBAL_METHOD, this, new Object[]{amount});
+        return VM1.execute(0x73A91C2D, this, amount);
     }
 
     private int helper(int value)
@@ -161,7 +161,7 @@ public class TargetClass
     public int callHelper(int value)
     {
         calls++;
-        return VM1.executeInt(CodePool.CALL_HELPER_METHOD, this, new Object[]{value});
+        return VM1.execute(0x4F1E2D3C, this, value);
     }
 
     private static int rotate(int value)
@@ -177,7 +177,7 @@ public class TargetClass
     public int callStatic(int value)
     {
         calls++;
-        return VM1.executeInt(CodePool.CALL_STATIC_METHOD, this, new Object[]{value});
+        return VM1.execute(0x66CC8842, this, value);
     }
 
     public String describe()

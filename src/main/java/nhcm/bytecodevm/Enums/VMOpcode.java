@@ -107,8 +107,6 @@ public enum VMOpcode
             Opcs.IFNULL,
             Opcs.IFNONNULL),
     GOTO(Opcs.GOTO),
-    SUBROUTINE_CALL(Opcs.JSR),
-    SUBROUTINE_RETURN(Opcs.RET),
     SWITCH(Opcs.TABLESWITCH, Opcs.LOOKUPSWITCH),
 
     RETURN(
