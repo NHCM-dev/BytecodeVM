@@ -7,8 +7,18 @@ import nhcm.bytecodevm.Generator.Abstract.ClassObj;
 import nhcm.bytecodevm.Generator.GlobalTool.MethodFrameGenerator;
 import nhcm.bytecodevm.Generator.GlobalTool.VMCodePoolGenerator;
 import nhcm.bytecodevm.Generator.GlobalTool.VMProgramGenerator;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Conversion.CompareBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Conversion.ConvertBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Control.FlowBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Control.GotoBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Control.SwitchBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Local.StoreLocalBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Stack.DuplicateBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Stack.PopBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Stack.SwapBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretContext;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Constant.*;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Math.*;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Local.IncrementBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Local.LoadLocalBranch;
@@ -37,21 +47,63 @@ public class VMGenerator extends ClassObj
 
     private static void registerBranches()
     {
-        register(new ReturnBranch());
-        register(new LoadLocalBranch());
-        register(new IncrementBranch());
-        register(new AddBranch());
-        register(new SubtractBranch());
-        register(new MultiplyBranch());
-        register(new DivideBranch());
-        register(new RemainderBranch());
-        register(new NegateBranch());
-        register(new ShiftLeftBranch());
-        register(new ShiftRightBranch());
-        register(new UnsignedShiftRightBranch());
-        register(new BitwiseAndBranch());
-        register(new BitwiseOrBranch());
-        register(new BitwiseXorBranch());
+        List<InterpretBranch> array = List.of();
+        List<InterpretBranch> constant = List.of(
+                new LoadConstantBranch(),
+                new NopBranch(),
+                new PushDoubleBranch(),
+                new PushFloatBranch(),
+                new PushIntBranch(),
+                new PushLongBranch(),
+                new PushNullBranch()
+        );
+        List<InterpretBranch> control = List.of(
+                new FlowBranch(),
+                new GotoBranch(),
+                new ReturnBranch(),
+                new SwitchBranch()
+        );
+        List<InterpretBranch> conversion = List.of(
+                new CompareBranch(),
+                new ConvertBranch()
+        );
+        List<InterpretBranch> field = List.of();
+        List<InterpretBranch> invoke = List.of();
+        List<InterpretBranch> local = List.of(
+                new IncrementBranch(),
+                new LoadLocalBranch(),
+                new StoreLocalBranch()
+        );
+        List<InterpretBranch> math = List.of(
+                new AddBranch(),
+                new BitwiseAndBranch(),
+                new BitwiseOrBranch(),
+                new BitwiseXorBranch(),
+                new DivideBranch(),
+                new MultiplyBranch(),
+                new NegateBranch(),
+                new RemainderBranch(),
+                new ShiftLeftBranch(),
+                new ShiftRightBranch(),
+                new SubtractBranch(),
+                new UnsignedShiftRightBranch()
+        );
+        List<InterpretBranch> object = List.of();
+        List<InterpretBranch> stack = List.of(
+                new DuplicateBranch(),
+                new PopBranch(),
+                new SwapBranch()
+        );
+        array.forEach(VMGenerator::register);
+        constant.forEach(VMGenerator::register);
+        control.forEach(VMGenerator::register);
+        conversion.forEach(VMGenerator::register);
+        field.forEach(VMGenerator::register);
+        invoke.forEach(VMGenerator::register);
+        local.forEach(VMGenerator::register);
+        math.forEach(VMGenerator::register);
+        object.forEach(VMGenerator::register);
+        stack.forEach(VMGenerator::register);
     }
 
     @Getter

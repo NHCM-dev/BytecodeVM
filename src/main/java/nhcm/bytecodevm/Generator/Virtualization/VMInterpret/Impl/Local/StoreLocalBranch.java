@@ -9,12 +9,12 @@ import org.objectweb.asm.tree.InsnList;
 
 import java.util.Set;
 
-public class LoadLocalBranch extends InterpretBranch
+public class StoreLocalBranch extends InterpretBranch
 {
     @Override
     public Set<Opcs> opcodes()
     {
-        return VMOpcode.LOAD_LOCAL.getOpcodes();
+        return VMOpcode.STORE_LOCAL.getOpcodes();
     }
 
     @Override
@@ -24,8 +24,8 @@ public class LoadLocalBranch extends InterpretBranch
         context.loadFrame(ib);
         ib.getField(context.frameClassName, "locals", "[Ljava/lang/Object;");
         context.nextToken(ib);
-        ib.aaload();
-        pushObject(ib, context);
+        popObject(ib, context);
+        ib.aastore();
         return ib.toInsnList();
     }
 }

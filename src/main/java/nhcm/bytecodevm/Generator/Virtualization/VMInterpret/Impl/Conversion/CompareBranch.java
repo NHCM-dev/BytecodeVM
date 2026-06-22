@@ -1,4 +1,4 @@
-package nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Math.Abstract;
+package nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Conversion;
 
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Enums.VMOpcode;
@@ -10,39 +10,39 @@ import org.objectweb.asm.tree.InsnList;
 
 import java.util.Set;
 
-public abstract class BinaryMathBranch extends InterpretBranch
+public class CompareBranch extends InterpretBranch
 {
-    private final VMOpcode vmOpcode;
-
-    protected BinaryMathBranch(VMOpcode vmOpcode)
+    @Override
+    public Set<Opcs> opcodes()
     {
-        this.vmOpcode = vmOpcode;
+        return VMOpcode.COMPARE.getOpcodes();
     }
 
     @Override
-    public final Set<Opcs> opcodes()
+    public InsnList generate(InterpretContext context, Opcs opcode)
     {
-        return vmOpcode.getOpcodes();
-    }
-
-    @Override
-    public final InsnList generate(InterpretContext context, Opcs opcode)
-    {
-        if (!vmOpcode.contains(opcode))
-        {
-            throw new IllegalArgumentException(opcode + " is not handled by " + vmOpcode);
-        }
+        InsnBuilder ib = new InsnBuilder();
 
         NumericType type = NumericType.fromOpcode(opcode);
-        InsnBuilder ib = new InsnBuilder();
+
         popNumber(ib, context, type, InterpretContext.RIGHT_VALUE);
         popNumber(ib, context, type, InterpretContext.LEFT_VALUE);
+
         type.load(ib, InterpretContext.LEFT_VALUE);
         type.load(ib, InterpretContext.RIGHT_VALUE);
-        emitOperation(ib, type);
-        pushNumber(ib, context, type);
+
+        switch (opcode)
+        {
+            case LCMP -> ib.lcmp();
+
+            case FCMPL -> ib.fcmpl();
+            case FCMPG -> ib.fcmpg();
+
+            case DCMPL -> ib.dcmpl();
+            case DCMPG -> ib.dcmpg();
+        }
+
+        pushInt(ib, context);
         return ib.toInsnList();
     }
-
-    protected abstract void emitOperation(InsnBuilder ib, NumericType type);
 }

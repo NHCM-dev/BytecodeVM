@@ -35,12 +35,10 @@ public abstract class UnaryMathBranch extends InterpretBranch
 
         NumericType type = NumericType.fromOpcode(opcode);
         InsnBuilder ib = new InsnBuilder();
-        context.popNumber(ib, type, InterpretContext.RIGHT_VALUE);
-        context.loadFrame(ib);
+        popNumber(ib, context, type, InterpretContext.RIGHT_VALUE);
         type.load(ib, InterpretContext.RIGHT_VALUE);
         emitOperation(ib, type);
-        type.box(ib);
-        context.invokeFramePush(ib);
+        pushNumber(ib, context, type);
         return ib.toInsnList();
     }
 

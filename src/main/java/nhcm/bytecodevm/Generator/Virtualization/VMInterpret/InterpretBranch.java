@@ -17,40 +17,134 @@ public abstract class InterpretBranch
         return false;
     }
 
+    protected static void popObject(InsnBuilder ib, InterpretContext context)
+    {
+        context.loadFrame(ib);
+        ib.invokeVirtual(context.frameClassName, "pop", "()Ljava/lang/Object;");
+    }
+
+    protected static void popObject(InsnBuilder ib, InterpretContext context, int local)
+    {
+        popObject(ib, context);
+        ib.astore(local);
+    }
+
+    protected static void popNumber(InsnBuilder ib, InterpretContext context, NumericType type)
+    {
+        popObject(ib, context);
+        type.unbox(ib);
+    }
+
+    protected static void popNumber(InsnBuilder ib, InterpretContext context, NumericType type, int local)
+    {
+        popNumber(ib, context, type);
+        type.store(ib, local);
+    }
+
+    protected static void popInt(InsnBuilder ib, InterpretContext context)
+    {
+        popNumber(ib, context, NumericType.INT);
+    }
+
     protected static void popInt(InsnBuilder ib, InterpretContext context, int local)
     {
-        popObject(ib, context, "java/lang/Integer", "intValue", "()I");
-        ib.istore(local);
+        popNumber(ib, context, NumericType.INT, local);
+    }
+
+    protected static void popLong(InsnBuilder ib, InterpretContext context)
+    {
+        popNumber(ib, context, NumericType.LONG);
     }
 
     protected static void popLong(InsnBuilder ib, InterpretContext context, int local)
     {
-        popObject(ib, context, "java/lang/Long", "longValue", "()J");
-        ib.lstore(local);
+        popNumber(ib, context, NumericType.LONG, local);
+    }
+
+    protected static void popFloat(InsnBuilder ib, InterpretContext context)
+    {
+        popNumber(ib, context, NumericType.FLOAT);
     }
 
     protected static void popFloat(InsnBuilder ib, InterpretContext context, int local)
     {
-        popObject(ib, context, "java/lang/Float", "floatValue", "()F");
-        ib.fstore(local);
+        popNumber(ib, context, NumericType.FLOAT, local);
+    }
+
+    protected static void popDouble(InsnBuilder ib, InterpretContext context)
+    {
+        popNumber(ib, context, NumericType.DOUBLE);
     }
 
     protected static void popDouble(InsnBuilder ib, InterpretContext context, int local)
     {
-        popObject(ib, context, "java/lang/Double", "doubleValue", "()D");
-        ib.dstore(local);
+        popNumber(ib, context, NumericType.DOUBLE, local);
     }
 
-    protected static void popObject(
-            InsnBuilder ib,
-            InterpretContext context,
-            String wrapper,
-            String unboxMethod,
-            String unboxDescriptor)
+    /** Pushes the Object currently on top of the generated JVM operand stack. */
+    protected static void pushObject(InsnBuilder ib, InterpretContext context)
     {
-        ib.aload(InterpretContext.FRAME);
-        ib.invokeVirtual(context.frameClassName, "pop", "()Ljava/lang/Object;");
-        ib.checkCast(wrapper);
-        ib.invokeVirtual(wrapper, unboxMethod, unboxDescriptor);
+        context.loadFrame(ib);
+        ib.swap();
+        context.invokeFramePush(ib);
+    }
+
+    protected static void pushObject(InsnBuilder ib, InterpretContext context, int local)
+    {
+        ib.aload(local);
+        pushObject(ib, context);
+    }
+
+    /** Boxes and pushes the primitive currently on top of the JVM operand stack. */
+    protected static void pushNumber(InsnBuilder ib, InterpretContext context, NumericType type)
+    {
+        type.box(ib);
+        pushObject(ib, context);
+    }
+
+    protected static void pushNumber(InsnBuilder ib, InterpretContext context, NumericType type, int local)
+    {
+        type.load(ib, local);
+        pushNumber(ib, context, type);
+    }
+
+    protected static void pushInt(InsnBuilder ib, InterpretContext context)
+    {
+        pushNumber(ib, context, NumericType.INT);
+    }
+
+    protected static void pushInt(InsnBuilder ib, InterpretContext context, int local)
+    {
+        pushNumber(ib, context, NumericType.INT, local);
+    }
+
+    protected static void pushLong(InsnBuilder ib, InterpretContext context)
+    {
+        pushNumber(ib, context, NumericType.LONG);
+    }
+
+    protected static void pushLong(InsnBuilder ib, InterpretContext context, int local)
+    {
+        pushNumber(ib, context, NumericType.LONG, local);
+    }
+
+    protected static void pushFloat(InsnBuilder ib, InterpretContext context)
+    {
+        pushNumber(ib, context, NumericType.FLOAT);
+    }
+
+    protected static void pushFloat(InsnBuilder ib, InterpretContext context, int local)
+    {
+        pushNumber(ib, context, NumericType.FLOAT, local);
+    }
+
+    protected static void pushDouble(InsnBuilder ib, InterpretContext context)
+    {
+        pushNumber(ib, context, NumericType.DOUBLE);
+    }
+
+    protected static void pushDouble(InsnBuilder ib, InterpretContext context, int local)
+    {
+        pushNumber(ib, context, NumericType.DOUBLE, local);
     }
 }

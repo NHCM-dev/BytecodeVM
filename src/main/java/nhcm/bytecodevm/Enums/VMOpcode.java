@@ -89,7 +89,7 @@ public enum VMOpcode
             Opcs.I2S),
     COMPARE(Opcs.LCMP, Opcs.FCMPL, Opcs.FCMPG, Opcs.DCMPL, Opcs.DCMPG),
 
-    BRANCH(
+    FLOW(
             Opcs.IFEQ,
             Opcs.IFNE,
             Opcs.IFLT,

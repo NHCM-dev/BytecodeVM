@@ -35,14 +35,12 @@ public abstract class ShiftMathBranch extends InterpretBranch
 
         NumericType valueType = NumericType.fromOpcode(opcode);
         InsnBuilder ib = new InsnBuilder();
-        context.popNumber(ib, NumericType.INT, InterpretContext.RIGHT_VALUE);
-        context.popNumber(ib, valueType, InterpretContext.LEFT_VALUE);
-        context.loadFrame(ib);
+        popNumber(ib, context, NumericType.INT, InterpretContext.RIGHT_VALUE);
+        popNumber(ib, context, valueType, InterpretContext.LEFT_VALUE);
         valueType.load(ib, InterpretContext.LEFT_VALUE);
         NumericType.INT.load(ib, InterpretContext.RIGHT_VALUE);
         emitOperation(ib, valueType);
-        valueType.box(ib);
-        context.invokeFramePush(ib);
+        pushNumber(ib, context, valueType);
         return ib.toInsnList();
     }
 
