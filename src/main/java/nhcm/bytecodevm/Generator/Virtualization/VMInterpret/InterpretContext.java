@@ -30,6 +30,10 @@ public final class InterpretContext
     public static final int ARRAY_DIMENSIONS = 38;
     public static final int ARRAY_LENGTHS = 39;
     public static final int ARRAY_INDEX = 40;
+    public static final int EXCEPTION_HANDLERS = 41;
+    public static final int INSTRUCTION_PC = 42;
+    public static final int THROWN = 43;
+    public static final int HANDLER_PC = 44;
     public static final int JUMP_TARGET = 9;
     public static final int SWITCH_KEY = 10;
     public static final int SWITCH_MIN = 11;

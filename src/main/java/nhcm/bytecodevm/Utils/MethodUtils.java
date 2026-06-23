@@ -36,4 +36,14 @@ public class MethodUtils
     {
         return (methodNode.access & Opcodes.ACC_STATIC) != 0;
     }
+
+    public static boolean isAbstract(MethodNode methodNode)
+    {
+        return (methodNode.access & Opcodes.ACC_ABSTRACT) != 0;
+    }
+
+    public static boolean isNative(MethodNode methodNode)
+    {
+        return (methodNode.access & Opcodes.ACC_NATIVE) != 0;
+    }
 }

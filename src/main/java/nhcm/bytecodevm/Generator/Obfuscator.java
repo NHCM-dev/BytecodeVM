@@ -9,6 +9,7 @@ import nhcm.bytecodevm.Generator.GlobalTool.VMProgramGenerator;
 import nhcm.bytecodevm.Tools.JarTransformer;
 import nhcm.bytecodevm.Tools.OpcMutator;
 import nhcm.bytecodevm.Utils.ClassUtils;
+import nhcm.bytecodevm.Utils.MethodUtils;
 import nhcm.bytecodevm.Utils.RandomUtils;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodNode;
@@ -89,6 +90,11 @@ public class Obfuscator
         System.out.println("Done virtualizing all classes");
     }
 
+    private static boolean shouldIgnoreMethod(MethodNode methodNode)
+    {
+        return MethodUtils.isAbstract(methodNode) || MethodUtils.isNative(methodNode);
+    }
+
     private void processJar(JarTransformer.JarContext context)
     {
         System.out.println("Scanning input file for methods to obfuscate");
@@ -112,7 +118,7 @@ public class Obfuscator
                     case SAME_PACKAGE_AS_TARGET -> VMlocation = classPackage;
                 }
                 VMSetGenerator perClass = newVMSetGenerator(
-                        classNode.name + "$VM",
+                        ClassUtils.getSimpleName(classNode) + "$VM",
                         VMlocation);
                 if(config.createMode == BytecodeVMConfig.VMCreateMode.PER_CLASS)
                 {
@@ -120,6 +126,10 @@ public class Obfuscator
                 }
                 for(MethodNode methodNode : classNode.methods)
                 {
+                    if(shouldIgnoreMethod(methodNode))
+                    {
+                        continue;
+                    }
                     if(!targetExclude.isMethodMatched(classNode, methodNode))
                     {
                         switch (config.createMode)
@@ -132,7 +142,7 @@ public class Obfuscator
                             case PER_METHOD:
                             {
                                 VMSetGenerator perMethod = newVMSetGenerator(
-                                        classNode.name + "$" + methodNode.name + "$VM",
+                                        ClassUtils.getSimpleName(classNode) + "$" + methodNode.name + "$VM",
                                         VMlocation);
                                 perMethods.add(perMethod);
                                 perMethod.addMethod(methodNode, classNode);

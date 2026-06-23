@@ -69,10 +69,12 @@ public class VMMethodCompiler
         }
 
         resolveJumps(code, labels, jumps);
+        int[] exceptionHandlers = compileExceptionHandlers(method, constants, labels);
 
         return new VMMethod(
                 code.toArray(),
                 constants.toArray(),
+                exceptionHandlers,
                 method.maxLocals,
                 method.maxStack,
                 opcMutator);
@@ -256,6 +258,33 @@ public class VMMethodCompiler
 
             code.set(jump.operandIndex, targetPc);
         }
+    }
+
+    private static int[] compileExceptionHandlers(
+            MethodNode method,
+            List<Object> constants,
+            Map<LabelNode, Integer> labels)
+    {
+        IntArrayBuilder handlers = new IntArrayBuilder();
+        for (TryCatchBlockNode block : method.tryCatchBlocks)
+        {
+            Integer start = labels.get(block.start);
+            Integer end = labels.get(block.end);
+            Integer handler = labels.get(block.handler);
+
+            if (start == null || end == null || handler == null)
+            {
+                throw new IllegalStateException(
+                        "Try/catch block labels are not part of method " +
+                                method.name + method.desc);
+            }
+
+            handlers.add(start);
+            handlers.add(end);
+            handlers.add(handler);
+            handlers.add(block.type == null ? -1 : addConstant(constants, block.type));
+        }
+        return handlers.toArray();
     }
 
     private static IllegalArgumentException unsupported(ClassNode owner, MethodNode method, AbstractInsnNode insn)

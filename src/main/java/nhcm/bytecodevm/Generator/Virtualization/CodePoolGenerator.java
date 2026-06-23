@@ -30,10 +30,12 @@ public class CodePoolGenerator extends ClassObj
     private final List<CompiledMethod> compiledMethods;
     private final List<CompiledMethod> methodsByCodeIndex;
     private final List<CompiledMethod> methodsByConstantsIndex;
+    private final List<CompiledMethod> methodsByExceptionHandlersIndex;
     private final List<CompiledMethod> methodsByMaxLocalsIndex;
     private final List<CompiledMethod> methodsByMaxStackIndex;
     private final Map<Integer, Integer> codeIndexById;
     private final Map<Integer, Integer> constantsIndexById;
+    private final Map<Integer, Integer> exceptionHandlersIndexById;
     private final Map<Integer, Integer> maxLocalsIndexById;
     private final Map<Integer, Integer> maxStackIndexById;
     private final VMProgramGenerator vmProgramGenerator;
@@ -57,10 +59,12 @@ public class CodePoolGenerator extends ClassObj
         this.compiledMethods = List.copyOf(compiledMethods);
         this.methodsByCodeIndex = createLayout(compiledMethods, shuffleMethods);
         this.methodsByConstantsIndex = createLayout(compiledMethods, shuffleMethods);
+        this.methodsByExceptionHandlersIndex = createLayout(compiledMethods, shuffleMethods);
         this.methodsByMaxLocalsIndex = createLayout(compiledMethods, shuffleMethods);
         this.methodsByMaxStackIndex = createLayout(compiledMethods, shuffleMethods);
         this.codeIndexById = indexByCodeId(methodsByCodeIndex);
         this.constantsIndexById = indexByCodeId(methodsByConstantsIndex);
+        this.exceptionHandlersIndexById = indexByCodeId(methodsByExceptionHandlersIndex);
         this.maxLocalsIndexById = indexByCodeId(methodsByMaxLocalsIndex);
         this.maxStackIndexById = indexByCodeId(methodsByMaxStackIndex);
 
@@ -79,12 +83,14 @@ public class CodePoolGenerator extends ClassObj
                 vmCodePoolGenerator.descriptor()));
         cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "CODES", "[[I"));
         cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "CONSTANTS", "[[Ljava/lang/Object;"));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "EXCEPTION_HANDLERS", "[[I"));
         cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "MAX_LOCALS", "[I"));
         cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "MAX_STACK", "[I"));
 
         MethodNode clinit = MethodUtils.newMethodNode(new Acc[]{Acc.STATIC}, "<clinit>", "()V");
         clinit.instructions.add(initCODES());
         clinit.instructions.add(initCONSTANTS());
+        clinit.instructions.add(initEXCEPTION_HANDLERS());
         clinit.instructions.add(initMAX_LOCALS_MAX_STACK());
         InsnBuilder ib = new InsnBuilder();
         ib.new_(className);
@@ -204,6 +210,36 @@ public class CodePoolGenerator extends ClassObj
         return ib.toInsnList();
     }
 
+    private InsnList initEXCEPTION_HANDLERS()
+    {
+        InsnBuilder ib = new InsnBuilder();
+        ib.pushInt(methodsByExceptionHandlersIndex.size());
+        ib.multiANewArray("[[I", 1);
+        for (int slot = 0; slot < methodsByExceptionHandlersIndex.size(); slot++)
+        {
+            int[] handlers = methodsByExceptionHandlersIndex.get(slot).vmMethod.exceptionHandlers;
+
+            ib.dup();
+            ib.pushInt(slot);
+
+            ib.pushInt(handlers.length);
+            ib.newArray(Opcodes.T_INT);
+
+            for (int handlerIndex = 0; handlerIndex < handlers.length; handlerIndex++)
+            {
+                ib.dup();
+                ib.pushInt(handlerIndex);
+                ib.pushInt(handlers[handlerIndex]);
+                ib.iastore();
+            }
+
+            ib.aastore();
+        }
+
+        ib.putStatic(className(), "EXCEPTION_HANDLERS", "[[I");
+        return ib.toInsnList();
+    }
+
     private void emitConstant(InsnBuilder ib, Object value)
     {
         switch (value)
@@ -230,7 +266,7 @@ public class CodePoolGenerator extends ClassObj
                 ib.pushDouble(number);
                 ib.invokeStatic("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;");
             }
-            case Type ignored -> ib.ldc(value);
+            case Type type -> emitTypeConstant(ib, type);
             case Handle ignored -> ib.ldc(value);
             case ConstantDynamic dynamic ->
             {
@@ -239,6 +275,20 @@ public class CodePoolGenerator extends ClassObj
             }
             default -> throw new IllegalArgumentException("Unsupported constant: " + value.getClass().getName());
         }
+    }
+
+    private void emitTypeConstant(InsnBuilder ib, Type type)
+    {
+        ib.iconst2();
+        ib.aneArray("java/lang/Object");
+        ib.dup();
+        ib.iconst0();
+        ib.ldc("__BytecodeVM_TYPE__");
+        ib.aastore();
+        ib.dup();
+        ib.iconst1();
+        ib.ldc(type.getDescriptor());
+        ib.aastore();
     }
 
     private InsnList initMAX_LOCALS_MAX_STACK()
@@ -302,6 +352,9 @@ public class CodePoolGenerator extends ClassObj
             ib.aaload();
             ib.getStatic(className(), "CONSTANTS", "[[Ljava/lang/Object;");
             ib.pushInt(constantsIndexById.get(codeId));
+            ib.aaload();
+            ib.getStatic(className(), "EXCEPTION_HANDLERS", "[[I");
+            ib.pushInt(exceptionHandlersIndexById.get(codeId));
             ib.aaload();
             ib.getStatic(className(), "MAX_LOCALS", "[I");
             ib.pushInt(maxLocalsIndexById.get(codeId));

@@ -21,11 +21,13 @@ public class VMProgramGenerator extends ClassObj
         ClassNode cn = ClassUtils.newClassNode(new Acc[]{Acc.PUBLIC, Acc.FINAL}, className);
         cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.FINAL}, "code", "[I"));
         cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.FINAL}, "constants", "[Ljava/lang/Object;"));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.FINAL}, "exceptionHandlers", "[I"));
         cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.FINAL}, "maxLocals", "I"));
         cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.FINAL}, "maxStack", "I"));
         cn.methods.add(generateConstructor());
         cn.methods.add(generateObjectGetter("code", "[I"));
         cn.methods.add(generateObjectGetter("constants", "[Ljava/lang/Object;"));
+        cn.methods.add(generateObjectGetter("exceptionHandlers", "[I"));
         cn.methods.add(generateIntGetter("maxLocals"));
         cn.methods.add(generateIntGetter("maxStack"));
         this.classNode = cn;
@@ -33,7 +35,7 @@ public class VMProgramGenerator extends ClassObj
 
     public String constructorDescriptor()
     {
-        return "([I[Ljava/lang/Object;II)V";
+        return "([I[Ljava/lang/Object;[III)V";
     }
 
     private MethodNode generateConstructor()
@@ -52,10 +54,13 @@ public class VMProgramGenerator extends ClassObj
         ib.aload(2);
         ib.putField(className(), "constants", "[Ljava/lang/Object;");
         ib.aload(0);
-        ib.iload(3);
-        ib.putField(className(), "maxLocals", "I");
+        ib.aload(3);
+        ib.putField(className(), "exceptionHandlers", "[I");
         ib.aload(0);
         ib.iload(4);
+        ib.putField(className(), "maxLocals", "I");
+        ib.aload(0);
+        ib.iload(5);
         ib.putField(className(), "maxStack", "I");
         ib._return();
         return method;

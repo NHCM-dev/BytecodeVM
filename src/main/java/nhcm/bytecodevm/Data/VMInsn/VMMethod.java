@@ -16,6 +16,7 @@ public class VMMethod implements Iterable<VMInstruction>
 {
     public final int[] code;
     public final Object[] constants;
+    public final int[] exceptionHandlers;
     public final int maxLocals;
     public final int maxStack;
 
@@ -25,7 +26,7 @@ public class VMMethod implements Iterable<VMInstruction>
 
     public VMMethod(int[] code, Object[] constants, int maxLocals, int maxStack)
     {
-        this(code, constants, maxLocals, maxStack, null);
+        this(code, constants, new int[0], maxLocals, maxStack, null);
     }
 
     public VMMethod(
@@ -35,8 +36,20 @@ public class VMMethod implements Iterable<VMInstruction>
             int maxStack,
             OpcMutator opcMutator)
     {
+        this(code, constants, new int[0], maxLocals, maxStack, opcMutator);
+    }
+
+    public VMMethod(
+            int[] code,
+            Object[] constants,
+            int[] exceptionHandlers,
+            int maxLocals,
+            int maxStack,
+            OpcMutator opcMutator)
+    {
         this.code = Objects.requireNonNull(code, "code");
         this.constants = Objects.requireNonNull(constants, "constants");
+        this.exceptionHandlers = Objects.requireNonNull(exceptionHandlers, "exceptionHandlers");
         this.maxLocals = maxLocals;
         this.maxStack = maxStack;
         this.opcMutator = opcMutator;

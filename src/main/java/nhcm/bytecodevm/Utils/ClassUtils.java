@@ -20,6 +20,13 @@ public class ClassUtils implements Opcodes
         return cn.name.substring(0, index);
     }
 
+    public static String getSimpleName(ClassNode cn)
+    {
+        String name = cn.name;
+        int index = name.lastIndexOf('/');
+        return index == -1 ? name : name.substring(index + 1);
+    }
+
     public static ClassNode newClassNode(Acc[] access, String className)
     {
         return newClassNode(access, className, "java/lang/Object");
