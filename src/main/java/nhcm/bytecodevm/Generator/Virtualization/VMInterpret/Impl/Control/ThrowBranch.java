@@ -22,6 +22,7 @@ public class ThrowBranch extends InterpretBranch
     {
         InsnBuilder ib = new InsnBuilder();
         popObject(ib, context);
+        ib.checkCast("java/lang/Throwable");
         ib.athrow();
         return ib.toInsnList();
     }

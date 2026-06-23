@@ -32,8 +32,8 @@ public abstract class InterpretBranch
 
     protected static void popNumber(InsnBuilder ib, InterpretContext context, NumericType type)
     {
-        popObject(ib, context);
-        type.unbox(ib);
+        context.loadFrame(ib);
+        ib.invokeVirtual(context.frameClassName, type.framePopName(), type.framePopDescriptor());
     }
 
     protected static void popNumber(InsnBuilder ib, InterpretContext context, NumericType type, int local)
@@ -120,8 +120,10 @@ public abstract class InterpretBranch
     /** Boxes and pushes the primitive currently on top of the JVM operand stack. */
     protected static void pushNumber(InsnBuilder ib, InterpretContext context, NumericType type)
     {
-        type.box(ib);
-        pushObjectWithWidth(ib, context, type.stackWidth());
+        type.store(ib, InterpretContext.RIGHT_VALUE);
+        context.loadFrame(ib);
+        type.load(ib, InterpretContext.RIGHT_VALUE);
+        ib.invokeVirtual(context.frameClassName, type.framePushName(), type.framePushDescriptor());
     }
 
     protected static void pushNumber(InsnBuilder ib, InterpretContext context, NumericType type, int local)

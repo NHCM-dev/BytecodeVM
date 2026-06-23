@@ -82,4 +82,48 @@ public enum NumericType
     {
         return this == LONG || this == DOUBLE ? 2 : 1;
     }
+
+    public String framePushName()
+    {
+        return switch (this)
+        {
+            case INT -> "pushInt";
+            case LONG -> "pushLong";
+            case FLOAT -> "pushFloat";
+            case DOUBLE -> "pushDouble";
+        };
+    }
+
+    public String framePushDescriptor()
+    {
+        return switch (this)
+        {
+            case INT -> "(I)V";
+            case LONG -> "(J)V";
+            case FLOAT -> "(F)V";
+            case DOUBLE -> "(D)V";
+        };
+    }
+
+    public String framePopName()
+    {
+        return switch (this)
+        {
+            case INT -> "popInt";
+            case LONG -> "popLong";
+            case FLOAT -> "popFloat";
+            case DOUBLE -> "popDouble";
+        };
+    }
+
+    public String framePopDescriptor()
+    {
+        return switch (this)
+        {
+            case INT -> "()I";
+            case LONG -> "()J";
+            case FLOAT -> "()F";
+            case DOUBLE -> "()D";
+        };
+    }
 }
