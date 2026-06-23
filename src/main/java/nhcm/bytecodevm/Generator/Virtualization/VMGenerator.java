@@ -7,26 +7,30 @@ import nhcm.bytecodevm.Generator.Abstract.ClassObj;
 import nhcm.bytecodevm.Generator.GlobalTool.MethodFrameGenerator;
 import nhcm.bytecodevm.Generator.GlobalTool.VMCodePoolGenerator;
 import nhcm.bytecodevm.Generator.GlobalTool.VMProgramGenerator;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Array.ArrayLengthBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Array.LoadArrayBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Array.NewArrayBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Array.StoreArrayBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Control.*;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Conversion.CompareBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Conversion.ConvertBranch;
-import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Control.FlowBranch;
-import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Control.GotoBranch;
-import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Control.SwitchBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Field.ReadFieldBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Field.WriteFieldBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Invoke.InvokeDynamicBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Invoke.InvokeNormalBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Local.StoreLocalBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Object.CastBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Object.NewObjectBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Stack.DuplicateBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Stack.PopBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Stack.SwapBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.lock.MonitorBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretContext;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Constant.*;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Math.*;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Local.IncrementBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Local.LoadLocalBranch;
-import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Control.ReturnBranch;
 import nhcm.bytecodevm.Tools.OpcMutator;
 import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
 import nhcm.bytecodevm.Utils.ClassUtils;
@@ -51,7 +55,12 @@ public class VMGenerator extends ClassObj
 
     private static void registerBranches()
     {
-        List<InterpretBranch> array = List.of();
+        List<InterpretBranch> array = List.of(
+                new ArrayLengthBranch(),
+                new LoadArrayBranch(),
+                new NewArrayBranch(),
+                new StoreArrayBranch()
+        );
         List<InterpretBranch> constant = List.of(
                 new LoadConstantBranch(),
                 new NopBranch(),
@@ -64,6 +73,8 @@ public class VMGenerator extends ClassObj
         List<InterpretBranch> control = List.of(
                 new FlowBranch(),
                 new GotoBranch(),
+                new InstanceofBranch(),
+                new MonitorBranch(),
                 new ReturnBranch(),
                 new SwitchBranch()
         );
@@ -76,6 +87,7 @@ public class VMGenerator extends ClassObj
                 new WriteFieldBranch()
         );
         List<InterpretBranch> invoke = List.of(
+                new InvokeDynamicBranch(),
                 new InvokeNormalBranch()
         );
         List<InterpretBranch> local = List.of(
@@ -98,6 +110,7 @@ public class VMGenerator extends ClassObj
                 new UnsignedShiftRightBranch()
         );
         List<InterpretBranch> object = List.of(
+                new CastBranch(),
                 new NewObjectBranch()
         );
         List<InterpretBranch> stack = List.of(
@@ -143,6 +156,7 @@ public class VMGenerator extends ClassObj
         cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "CODE_POOLS", "Ljava/util/List;", "Ljava/util/List<" + vmCodePoolSign + ">;"));
         cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "FIELD_HANDLES", "Ljava/util/Map;", "Ljava/util/Map<Ljava/lang/String;Ljava/lang/invoke/MethodHandle;>;"));
         cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "METHOD_HANDLES", "Ljava/util/Map;", "Ljava/util/Map<Ljava/lang/String;Ljava/lang/invoke/MethodHandle;>;"));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "MONITORS", "Ljava/util/Map;", "Ljava/util/Map<Ljava/lang/Object;Ljava/util/concurrent/locks/ReentrantLock;>;"));
         cn.methods.add(genInitMethod(codePoolGenerators));
         cn.methods.add(genExecuteMethod());
         cn.methods.add(genInterpretMethod());
@@ -155,6 +169,9 @@ public class VMGenerator extends ClassObj
         cn.methods.add(genInvokeMethod());
         cn.methods.add(genConstructMethod());
         cn.methods.add(genLoadOwnerMethod());
+        cn.methods.add(genMonitorForMethod());
+        cn.methods.add(genMonitorEnterMethod());
+        cn.methods.add(genMonitorExitMethod());
         cn.methods.add(genRethrowMethod());
     }
 
@@ -910,12 +927,92 @@ public class VMGenerator extends ClassObj
                 "loadOwner",
                 "(Ljava/lang/String;)Ljava/lang/Class;");
         InsnBuilder ib = new InsnBuilder(method.instructions);
+        LabelNode primitiveBoolean = new LabelNode();
+        LabelNode primitiveChar = new LabelNode();
+        LabelNode primitiveByte = new LabelNode();
+        LabelNode primitiveShort = new LabelNode();
+        LabelNode primitiveInt = new LabelNode();
+        LabelNode primitiveFloat = new LabelNode();
+        LabelNode primitiveLong = new LabelNode();
+        LabelNode primitiveDouble = new LabelNode();
+        LabelNode primitiveVoid = new LabelNode();
+        LabelNode notPrimitive = new LabelNode();
+        LabelNode notObjectDescriptor = new LabelNode();
         LabelNode start = new LabelNode();
         LabelNode end = new LabelNode();
         LabelNode handler = new LabelNode();
         method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
                 start, end, handler, "java/lang/ClassNotFoundException"));
 
+        ib.aload(0);
+        ib.invokeVirtual("java/lang/String", "length", "()I");
+        ib.iconst1();
+        ib.ifIcmpNe(notPrimitive);
+        ib.aload(0);
+        ib.iconst0();
+        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
+        ib.bipush('Z');
+        ib.ifIcmpEq(primitiveBoolean);
+        ib.aload(0);
+        ib.iconst0();
+        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
+        ib.bipush('C');
+        ib.ifIcmpEq(primitiveChar);
+        ib.aload(0);
+        ib.iconst0();
+        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
+        ib.bipush('B');
+        ib.ifIcmpEq(primitiveByte);
+        ib.aload(0);
+        ib.iconst0();
+        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
+        ib.bipush('S');
+        ib.ifIcmpEq(primitiveShort);
+        ib.aload(0);
+        ib.iconst0();
+        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
+        ib.bipush('I');
+        ib.ifIcmpEq(primitiveInt);
+        ib.aload(0);
+        ib.iconst0();
+        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
+        ib.bipush('F');
+        ib.ifIcmpEq(primitiveFloat);
+        ib.aload(0);
+        ib.iconst0();
+        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
+        ib.bipush('J');
+        ib.ifIcmpEq(primitiveLong);
+        ib.aload(0);
+        ib.iconst0();
+        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
+        ib.bipush('D');
+        ib.ifIcmpEq(primitiveDouble);
+        ib.aload(0);
+        ib.iconst0();
+        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
+        ib.bipush('V');
+        ib.ifIcmpEq(primitiveVoid);
+
+        ib.label(notPrimitive);
+        ib.aload(0);
+        ib.ldc("L");
+        ib.invokeVirtual("java/lang/String", "startsWith", "(Ljava/lang/String;)Z");
+        ib.ifeq(notObjectDescriptor);
+        ib.aload(0);
+        ib.ldc(";");
+        ib.invokeVirtual("java/lang/String", "endsWith", "(Ljava/lang/String;)Z");
+        ib.ifeq(notObjectDescriptor);
+        ib.aload(0);
+        ib.iconst1();
+        ib.aload(0);
+        ib.invokeVirtual("java/lang/String", "length", "()I");
+        ib.iconst1();
+        ib.isub();
+        ib.invokeVirtual("java/lang/String", "substring", "(II)Ljava/lang/String;");
+        ib.astore(0);
+
+        ib.label(notObjectDescriptor);
         ib.label(start);
         ib.aload(0);
         ib.bipush('/');
@@ -938,6 +1035,34 @@ public class VMGenerator extends ClassObj
         ib.aload(1);
         ib.invokeSpecial("java/lang/IllegalStateException", "<init>", "(Ljava/lang/Throwable;)V");
         ib.athrow();
+
+        ib.label(primitiveBoolean);
+        ib.getStatic("java/lang/Boolean", "TYPE", "Ljava/lang/Class;");
+        ib.areturn();
+        ib.label(primitiveChar);
+        ib.getStatic("java/lang/Character", "TYPE", "Ljava/lang/Class;");
+        ib.areturn();
+        ib.label(primitiveByte);
+        ib.getStatic("java/lang/Byte", "TYPE", "Ljava/lang/Class;");
+        ib.areturn();
+        ib.label(primitiveShort);
+        ib.getStatic("java/lang/Short", "TYPE", "Ljava/lang/Class;");
+        ib.areturn();
+        ib.label(primitiveInt);
+        ib.getStatic("java/lang/Integer", "TYPE", "Ljava/lang/Class;");
+        ib.areturn();
+        ib.label(primitiveFloat);
+        ib.getStatic("java/lang/Float", "TYPE", "Ljava/lang/Class;");
+        ib.areturn();
+        ib.label(primitiveLong);
+        ib.getStatic("java/lang/Long", "TYPE", "Ljava/lang/Class;");
+        ib.areturn();
+        ib.label(primitiveDouble);
+        ib.getStatic("java/lang/Double", "TYPE", "Ljava/lang/Class;");
+        ib.areturn();
+        ib.label(primitiveVoid);
+        ib.getStatic("java/lang/Void", "TYPE", "Ljava/lang/Class;");
+        ib.areturn();
         return method;
     }
 
@@ -972,6 +1097,80 @@ public class VMGenerator extends ClassObj
         ib.aload(0);
         ib.invokeSpecial("java/lang/IllegalStateException", "<init>", "(Ljava/lang/Throwable;)V");
         ib.areturn();
+        return method;
+    }
+
+    private MethodNode genMonitorForMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(
+                new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.SYNCHRONIZED},
+                "monitorFor",
+                "(Ljava/lang/Object;)Ljava/util/concurrent/locks/ReentrantLock;");
+        InsnBuilder ib = new InsnBuilder(method.instructions);
+        LabelNode notNull = new LabelNode();
+        LabelNode existing = new LabelNode();
+
+        ib.aload(0);
+        ib.ifNonNull(notNull);
+        ib.new_("java/lang/NullPointerException");
+        ib.dup();
+        ib.invokeSpecial("java/lang/NullPointerException", "<init>", "()V");
+        ib.athrow();
+
+        ib.label(notNull);
+        ib.getStatic(className(), "MONITORS", "Ljava/util/Map;");
+        ib.aload(0);
+        ib.invokeInterface("java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
+        ib.checkCast("java/util/concurrent/locks/ReentrantLock");
+        ib.astore(1);
+
+        ib.aload(1);
+        ib.ifNonNull(existing);
+        ib.new_("java/util/concurrent/locks/ReentrantLock");
+        ib.dup();
+        ib.invokeSpecial("java/util/concurrent/locks/ReentrantLock", "<init>", "()V");
+        ib.astore(1);
+
+        ib.getStatic(className(), "MONITORS", "Ljava/util/Map;");
+        ib.aload(0);
+        ib.aload(1);
+        ib.invokeInterface(
+                "java/util/Map",
+                "put",
+                "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+        ib.pop();
+
+        ib.label(existing);
+        ib.aload(1);
+        ib.areturn();
+        return method;
+    }
+
+    private MethodNode genMonitorEnterMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(
+                new Acc[]{Acc.PRIVATE, Acc.STATIC},
+                "monitorEnter",
+                "(Ljava/lang/Object;)V");
+        InsnBuilder ib = new InsnBuilder(method.instructions);
+        ib.aload(0);
+        ib.invokeStatic(className(), "monitorFor", "(Ljava/lang/Object;)Ljava/util/concurrent/locks/ReentrantLock;");
+        ib.invokeVirtual("java/util/concurrent/locks/ReentrantLock", "lock", "()V");
+        ib._return();
+        return method;
+    }
+
+    private MethodNode genMonitorExitMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(
+                new Acc[]{Acc.PRIVATE, Acc.STATIC},
+                "monitorExit",
+                "(Ljava/lang/Object;)V");
+        InsnBuilder ib = new InsnBuilder(method.instructions);
+        ib.aload(0);
+        ib.invokeStatic(className(), "monitorFor", "(Ljava/lang/Object;)Ljava/util/concurrent/locks/ReentrantLock;");
+        ib.invokeVirtual("java/util/concurrent/locks/ReentrantLock", "unlock", "()V");
+        ib._return();
         return method;
     }
 
@@ -1100,6 +1299,15 @@ public class VMGenerator extends ClassObj
         ib.dup();
         ib.invokeSpecial("java/util/concurrent/ConcurrentHashMap", "<init>", "()V");
         ib.putStatic(className(), "METHOD_HANDLES", "Ljava/util/Map;");
+
+        ib.new_("java/util/WeakHashMap");
+        ib.dup();
+        ib.invokeSpecial("java/util/WeakHashMap", "<init>", "()V");
+        ib.invokeStatic(
+                "java/util/Collections",
+                "synchronizedMap",
+                "(Ljava/util/Map;)Ljava/util/Map;");
+        ib.putStatic(className(), "MONITORS", "Ljava/util/Map;");
 
         ib._return();
 

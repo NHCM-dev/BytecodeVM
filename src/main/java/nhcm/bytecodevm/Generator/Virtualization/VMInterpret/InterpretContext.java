@@ -25,6 +25,11 @@ public final class InterpretContext
     public static final int FIELD_NAME = 33;
     public static final int FIELD_DESCRIPTOR = 34;
     public static final int FIELD_RESULT = 35;
+    public static final int ARRAY_ATYPE = 36;
+    public static final int ARRAY_COMPONENT = 37;
+    public static final int ARRAY_DIMENSIONS = 38;
+    public static final int ARRAY_LENGTHS = 39;
+    public static final int ARRAY_INDEX = 40;
     public static final int JUMP_TARGET = 9;
     public static final int SWITCH_KEY = 10;
     public static final int SWITCH_MIN = 11;
