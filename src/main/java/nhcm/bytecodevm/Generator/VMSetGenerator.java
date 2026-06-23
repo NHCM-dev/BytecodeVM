@@ -1,6 +1,7 @@
 package nhcm.bytecodevm.Generator;
 
 import lombok.Getter;
+import nhcm.bytecodevm.Config.BytecodeVMConfig;
 import nhcm.bytecodevm.Data.CompiledMethod;
 import nhcm.bytecodevm.Data.VMInsn.VMMethod;
 import nhcm.bytecodevm.Data.VirtualizationResult;
@@ -40,8 +41,15 @@ public class VMSetGenerator
     private final List<CompiledMethod> compiledMethods = new ArrayList<>();
     @Getter
     private final List<CodePoolGenerator> codePoolGenerators = new ArrayList<>();
+    private final BytecodeVMConfig config;
 
-    public VMSetGenerator(String name, String location, OpcMutator opcMutator, MethodFrameGenerator methodFrameGenerator, VMProgramGenerator vmProgramGenerator, VMCodePoolGenerator vmCodePoolGenerator)
+    public VMSetGenerator(
+            String name, String location,
+            OpcMutator opcMutator,
+            MethodFrameGenerator methodFrameGenerator,
+            VMProgramGenerator vmProgramGenerator,
+            VMCodePoolGenerator vmCodePoolGenerator,
+            BytecodeVMConfig config)
     {
         this.vmClassName = qualifyClassName(location, name);
         this.codePoolClassName = vmClassName + "$CodePool";
@@ -49,6 +57,7 @@ public class VMSetGenerator
         this.methodFrameGenerator = methodFrameGenerator;
         this.vmProgramGenerator = vmProgramGenerator;
         this.vmCodePoolGenerator = vmCodePoolGenerator;
+        this.config = config;
         this.compiler = new VMMethodCompiler(opcMutator);
     }
 
@@ -93,7 +102,7 @@ public class VMSetGenerator
 
         createCodePools();
 
-        ClassNode vmClass = new VMGenerator(vmClassName, codePoolGenerators, opcMutator, methodFrameGenerator, vmProgramGenerator, vmCodePoolGenerator).getClassNode();
+        ClassNode vmClass = new VMGenerator(vmClassName, codePoolGenerators, opcMutator, methodFrameGenerator, vmProgramGenerator, vmCodePoolGenerator, config).getClassNode();
         List<ClassNode> codePoolClasses = new ArrayList<>();
         for (CodePoolGenerator codePoolGenerator : codePoolGenerators)
         {

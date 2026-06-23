@@ -2,8 +2,10 @@ package nhcm.bytecodevm.Generator.Virtualization;
 
 import lombok.Getter;
 import nhcm.bytecodevm.Data.CompiledMethod;
+import nhcm.bytecodevm.Data.VMInsn.VMInstruction;
 import nhcm.bytecodevm.Data.VMInsn.VMMethod;
 import nhcm.bytecodevm.Enums.Acc;
+import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Generator.Abstract.ClassObj;
 import nhcm.bytecodevm.Generator.GlobalTool.VMCodePoolGenerator;
 import nhcm.bytecodevm.Generator.GlobalTool.VMProgramGenerator;
@@ -18,12 +20,7 @@ import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.MethodNode;
 
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 public class CodePoolGenerator extends ClassObj
 {
@@ -85,20 +82,34 @@ public class CodePoolGenerator extends ClassObj
         cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "MAX_LOCALS", "[I"));
         cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "MAX_STACK", "[I"));
 
-        MethodNode cinit = MethodUtils.newMethodNode(new Acc[]{Acc.STATIC}, "<clinit>", "()V");
-        cinit.instructions.add(initCODES());
-        cinit.instructions.add(initCONSTANTS());
-        cinit.instructions.add(initMAX_LOCALS_MAX_STACK());
+        MethodNode clinit = MethodUtils.newMethodNode(new Acc[]{Acc.STATIC}, "<clinit>", "()V");
+        clinit.instructions.add(initCODES());
+        clinit.instructions.add(initCONSTANTS());
+        clinit.instructions.add(initMAX_LOCALS_MAX_STACK());
         InsnBuilder ib = new InsnBuilder();
         ib.new_(className);
         ib.dup();
         ib.invokeSpecial(className, "<init>", "()V");
         ib.putStatic(className, "INSTANCE", vmCodePoolGenerator.descriptor());
         ib._return();
-        cinit.instructions.add(ib.toInsnList());
-        cn.methods.add(cinit);
+        clinit.instructions.add(ib.toInsnList());
+        cn.methods.add(clinit);
 
         cn.methods.add(generateFind());
+    }
+
+    public List<Opcs> getUsedOpcodes()
+    {
+        Set<Opcs> usedOpcodes = new LinkedHashSet<>();
+        for(CompiledMethod method : compiledMethods)
+        {
+            VMMethod vmMethod = method.vmMethod;
+            for(VMInstruction insn : vmMethod)
+            {
+                usedOpcodes.add(insn.opcode);
+            }
+        }
+        return List.copyOf(usedOpcodes);
     }
 
     public static void boxIfPrimitive(InsnBuilder ib, Type type)

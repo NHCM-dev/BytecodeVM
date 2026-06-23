@@ -1,6 +1,7 @@
 package nhcm.bytecodevm.Generator.Virtualization;
 
 import lombok.Getter;
+import nhcm.bytecodevm.Config.BytecodeVMConfig;
 import nhcm.bytecodevm.Enums.Acc;
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Generator.Abstract.ClassObj;
@@ -77,7 +78,8 @@ public class VMGenerator extends ClassObj
                 new InstanceofBranch(),
                 new MonitorBranch(),
                 new ReturnBranch(),
-                new SwitchBranch()
+                new SwitchBranch(),
+                new ThrowBranch()
         );
         List<InterpretBranch> conversion = List.of(
                 new CompareBranch(),
@@ -141,8 +143,16 @@ public class VMGenerator extends ClassObj
     private final MethodFrameGenerator methodFrameGenerator;
     private final VMProgramGenerator vmProgramGenerator;
     private final VMCodePoolGenerator vmCodePoolGenerator;
+    private final BytecodeVMConfig config;
 
-    public VMGenerator(String className, List<CodePoolGenerator> codePoolGenerators, OpcMutator opcMutator, MethodFrameGenerator methodFrameGenerator, VMProgramGenerator vmProgramGenerator, VMCodePoolGenerator vmCodePoolGenerator)
+    public VMGenerator(
+            String className,
+            List<CodePoolGenerator> codePoolGenerators,
+            OpcMutator opcMutator,
+            MethodFrameGenerator methodFrameGenerator,
+            VMProgramGenerator vmProgramGenerator,
+            VMCodePoolGenerator vmCodePoolGenerator,
+            BytecodeVMConfig config)
     {
         super(className);
         this.codePoolGenerators = List.copyOf(codePoolGenerators);
@@ -150,6 +160,7 @@ public class VMGenerator extends ClassObj
         this.methodFrameGenerator = methodFrameGenerator;
         this.vmProgramGenerator = vmProgramGenerator;
         this.vmCodePoolGenerator = vmCodePoolGenerator;
+        this.config = config;
         ClassNode cn = ClassUtils.newClassNode(new Acc[]{Acc.PUBLIC, Acc.FINAL}, className);
         InsnUtils.addPrivateInit(cn);
         this.classNode = cn;
@@ -170,6 +181,7 @@ public class VMGenerator extends ClassObj
         cn.methods.add(genInvokeMethod());
         cn.methods.add(genConstructMethod());
         cn.methods.add(genCoerceArgumentMethod());
+        cn.methods.add(genCloneArrayMethod());
         cn.methods.add(genLoadOwnerMethod());
         cn.methods.add(genMonitorForMethod());
         cn.methods.add(genMonitorEnterMethod());
@@ -223,7 +235,18 @@ public class VMGenerator extends ClassObj
 
     private void generateDispatch(MethodNode method, LabelNode loopStart, LabelNode unknownOpcode)
     {
-        List<Opcs> opcodes = new ArrayList<>(branches.keySet());
+        List<Opcs> opcodes = new ArrayList<>();
+        switch (config.interpretMode)
+        {
+            case SAVE_ALL_INSTRUCTION -> opcodes.addAll(branches.keySet());
+            case SAVE_ONLY_REQUIRED_INSTRUCTION ->
+            {
+                for(CodePoolGenerator codePoolGenerator : codePoolGenerators)
+                {
+                    opcodes.addAll(codePoolGenerator.getUsedOpcodes());
+                }
+            }
+        }
 
         opcodes.sort((left, right) -> Integer.compare(
                 opcMutator.toMutated(left),
@@ -739,6 +762,25 @@ public class VMGenerator extends ClassObj
         int invocationArguments = 10;
         int exception = 11;
 
+        LabelNode normalInvoke = new LabelNode();
+        ib.iload(3);
+        ib.ifne(normalInvoke);
+        ib.aload(1);
+        ib.ldc("clone");
+        ib.invokeVirtual("java/lang/String", "equals", "(Ljava/lang/Object;)Z");
+        ib.ifeq(normalInvoke);
+        ib.aload(2);
+        ib.invokeVirtual("java/lang/invoke/MethodType", "parameterCount", "()I");
+        ib.ifne(normalInvoke);
+        ib.aload(4);
+        ib.invokeVirtual("java/lang/Object", "getClass", "()Ljava/lang/Class;");
+        ib.invokeVirtual("java/lang/Class", "isArray", "()Z");
+        ib.ifeq(normalInvoke);
+        ib.aload(4);
+        ib.invokeStatic(className(), "cloneArray", "(Ljava/lang/Object;)Ljava/lang/Object;");
+        ib.areturn();
+        ib.label(normalInvoke);
+
         emitMethodHandleKey(ib);
         ib.astore(key);
         ib.getStatic(className(), "METHOD_HANDLES", "Ljava/util/Map;");
@@ -1085,6 +1127,45 @@ public class VMGenerator extends ClassObj
 
         ib.label(originalValue);
         ib.aload(0);
+        ib.areturn();
+        return method;
+    }
+
+    private MethodNode genCloneArrayMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(
+                new Acc[]{Acc.PRIVATE, Acc.STATIC},
+                "cloneArray",
+                "(Ljava/lang/Object;)Ljava/lang/Object;");
+        InsnBuilder ib = new InsnBuilder(method.instructions);
+        int length = 1;
+        int clone = 2;
+
+        ib.aload(0);
+        ib.invokeStatic("java/lang/reflect/Array", "getLength", "(Ljava/lang/Object;)I");
+        ib.istore(length);
+
+        ib.aload(0);
+        ib.invokeVirtual("java/lang/Object", "getClass", "()Ljava/lang/Class;");
+        ib.invokeVirtual("java/lang/Class", "getComponentType", "()Ljava/lang/Class;");
+        ib.iload(length);
+        ib.invokeStatic(
+                "java/lang/reflect/Array",
+                "newInstance",
+                "(Ljava/lang/Class;I)Ljava/lang/Object;");
+        ib.astore(clone);
+
+        ib.aload(0);
+        ib.iconst0();
+        ib.aload(clone);
+        ib.iconst0();
+        ib.iload(length);
+        ib.invokeStatic(
+                "java/lang/System",
+                "arraycopy",
+                "(Ljava/lang/Object;ILjava/lang/Object;II)V");
+
+        ib.aload(clone);
         ib.areturn();
         return method;
     }

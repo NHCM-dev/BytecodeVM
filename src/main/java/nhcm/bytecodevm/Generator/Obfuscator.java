@@ -215,6 +215,7 @@ public class Obfuscator
                 chooseMutator(),
                 methodFrameGenerator,
                 vmProgramGenerator,
-                vmCodePoolGenerator);
+                vmCodePoolGenerator,
+                config);
     }
 }

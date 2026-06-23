@@ -17,6 +17,7 @@ public class BytecodeVMConfig
     public final VMLocation location;
     public final MutateMode mutateMode;
     public final RenameMode renameMode;
+    public final InterpretMode interpretMode;
     public final String[] exclusions;
 
     public enum VMCreateMode
@@ -44,10 +45,14 @@ public class BytecodeVMConfig
 
     public enum RenameMode
     {
-        ONLY_FOR_VMCLASS,
-        ONLY_FOR_VMPACKAGE,
         ENABLE,
         DISABLE
+    }
+
+    public enum InterpretMode
+    {
+        SAVE_ALL_INSTRUCTION,
+        SAVE_ONLY_REQUIRED_INSTRUCTION
     }
 
     public static BytecodeVMConfig parse(Path file) throws IOException
@@ -63,6 +68,7 @@ public class BytecodeVMConfig
                 .createMode(VMCreateMode.valueOf(json.get("createMode").getAsString()))
                 .location(VMLocation.valueOf(json.get("location").getAsString()))
                 .mutateMode(MutateMode.valueOf(json.get("mutateMode").getAsString()))
+                .interpretMode(InterpretMode.valueOf(json.get("interpretMode").getAsString()))
                 .renameMode(RenameMode.valueOf(json.get("renameMode").getAsString()))
                 .exclusions(exclusions).build();
     }
@@ -74,6 +80,7 @@ public class BytecodeVMConfig
         json.addProperty("createMode", createMode.name());
         json.addProperty("location", location.name());
         json.addProperty("mutateMode", mutateMode.name());
+        json.addProperty("interpretMode", interpretMode.name());
         json.addProperty("renameMode", renameMode.name());
         JsonArray exclusionsArr = new JsonArray();
         for(String exclusion : exclusions)

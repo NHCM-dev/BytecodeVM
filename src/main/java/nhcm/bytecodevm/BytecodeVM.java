@@ -14,8 +14,9 @@ public class BytecodeVM
               "createMode": "PER_CLASS", // ONE_FOR_ALL, PER_METHOD, PER_CLASS, PER_PACKAGE
               "location": "SAME_PACKAGE_AS_TARGET", // SAME_PACKAGE_AS_TARGET, NEW_PACKAGE, ONE_PACKAGE
               "mutateMode": "ALL_RANDOM_INT", // ALL_RANDOM_INT, ALL_RESORT, ALL_AUTO_CHOOSE, NO_CHANGE
-              "renameMode": "DISABLE", // ONLY_FOR_VMCLASS, ONLY_FOR_VMPACKAGE, ENABLE, DISABLE
-              "exclusions": []
+              "renameMode": "DISABLE", // ENABLE, DISABLE
+              "interpretMode": "SAVE_ONLY_REQUIRED_INSTRUCTION", // SAVE_ALL_INSTRUCTION, SAVE_ONLY_REQUIRED_INSTRUCTION
+              "exclusions": ["* <init>(*)V", "* <clinit>()V"]
             }
             """;
 
