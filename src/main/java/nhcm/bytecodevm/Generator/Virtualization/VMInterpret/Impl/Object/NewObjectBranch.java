@@ -1,4 +1,4 @@
-package nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Local;
+package nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Object;
 
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Enums.VMOpcode;
@@ -9,30 +9,30 @@ import org.objectweb.asm.tree.InsnList;
 
 import java.util.Set;
 
-public class LoadLocalBranch extends InterpretBranch
+public class NewObjectBranch extends InterpretBranch
 {
     @Override
     public Set<Opcs> opcodes()
     {
-        return VMOpcode.LOAD_LOCAL.getOpcodes();
+        return VMOpcode.NEW_OBJECT.getOpcodes();
     }
 
     @Override
     public InsnList generate(InterpretContext context, Opcs opcode)
     {
         InsnBuilder ib = new InsnBuilder();
-        context.loadFrame(ib);
-        ib.getField(context.frameClassName, "locals", "[Ljava/lang/Object;");
+
+        // An Object[1] is an identity marker for the JVM's uninitialized value.
+        // Its owner string is useful for diagnostics and keeps the marker runtime-only.
+        ib.iconst1();
+        ib.aneArray("java/lang/Object");
+        ib.dup();
+        ib.iconst0();
+        ib.aload(InterpretContext.CONSTANTS);
         context.nextToken(ib);
         ib.aaload();
-        if (opcode == Opcs.LLOAD || opcode == Opcs.DLOAD)
-        {
-            pushObjectWithWidth(ib, context, 2);
-        }
-        else
-        {
-            pushObject(ib, context);
-        }
+        ib.aastore();
+        pushObject(ib, context);
         return ib.toInsnList();
     }
 }

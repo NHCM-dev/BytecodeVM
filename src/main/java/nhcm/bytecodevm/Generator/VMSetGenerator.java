@@ -36,6 +36,7 @@ public class VMSetGenerator
     @Getter
     private final VMCodePoolGenerator vmCodePoolGenerator;
     private final VMMethodCompiler compiler;
+    private final InvocationBridgeGenerator invocationBridgeGenerator = new InvocationBridgeGenerator();
     private final List<CompiledMethod> compiledMethods = new ArrayList<>();
     @Getter
     private final List<CodePoolGenerator> codePoolGenerators = new ArrayList<>();
@@ -83,6 +84,7 @@ public class VMSetGenerator
             ClassNode owner = entry.getValue();
             MethodNode method = entry.getKey();
 
+            invocationBridgeGenerator.rewrite(owner, method);
             VMMethod vmMethod = compiler.compile(owner, method);
 
             int codeId = generateUniqueCodeId();

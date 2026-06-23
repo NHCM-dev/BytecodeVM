@@ -12,7 +12,11 @@ import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Conversion.Conv
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Control.FlowBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Control.GotoBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Control.SwitchBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Field.ReadFieldBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Field.WriteFieldBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Invoke.InvokeNormalBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Local.StoreLocalBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Object.NewObjectBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Stack.DuplicateBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Stack.PopBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Stack.SwapBranch;
@@ -67,8 +71,13 @@ public class VMGenerator extends ClassObj
                 new CompareBranch(),
                 new ConvertBranch()
         );
-        List<InterpretBranch> field = List.of();
-        List<InterpretBranch> invoke = List.of();
+        List<InterpretBranch> field = List.of(
+                new ReadFieldBranch(),
+                new WriteFieldBranch()
+        );
+        List<InterpretBranch> invoke = List.of(
+                new InvokeNormalBranch()
+        );
         List<InterpretBranch> local = List.of(
                 new IncrementBranch(),
                 new LoadLocalBranch(),
@@ -88,7 +97,9 @@ public class VMGenerator extends ClassObj
                 new SubtractBranch(),
                 new UnsignedShiftRightBranch()
         );
-        List<InterpretBranch> object = List.of();
+        List<InterpretBranch> object = List.of(
+                new NewObjectBranch()
+        );
         List<InterpretBranch> stack = List.of(
                 new DuplicateBranch(),
                 new PopBranch(),
@@ -142,6 +153,7 @@ public class VMGenerator extends ClassObj
         cn.methods.add(genSetFieldMethod());
         cn.methods.add(genFieldHandleMethod());
         cn.methods.add(genInvokeMethod());
+        cn.methods.add(genConstructMethod());
         cn.methods.add(genLoadOwnerMethod());
         cn.methods.add(genRethrowMethod());
     }
@@ -817,6 +829,73 @@ public class VMGenerator extends ClassObj
         ib.areturn();
 
         ib.label(invokeHandler);
+        ib.astore(exception);
+        ib.aload(exception);
+        ib.invokeStatic(className(), "rethrow", "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;");
+        ib.athrow();
+        return method;
+    }
+
+    private MethodNode genConstructMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(
+                new Acc[]{Acc.PRIVATE, Acc.STATIC},
+                "construct",
+                "(Ljava/lang/String;Ljava/lang/invoke/MethodType;[Ljava/lang/Object;)Ljava/lang/Object;");
+        InsnBuilder ib = new InsnBuilder(method.instructions);
+        int ownerClass = 3;
+        int constructor = 4;
+        int handle = 5;
+        int exception = 6;
+
+        LabelNode start = new LabelNode();
+        LabelNode end = new LabelNode();
+        LabelNode handler = new LabelNode();
+        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
+                start,
+                end,
+                handler,
+                "java/lang/Throwable"));
+
+        ib.label(start);
+        ib.aload(0);
+        ib.invokeStatic(className(), "loadOwner", "(Ljava/lang/String;)Ljava/lang/Class;");
+        ib.astore(ownerClass);
+
+        ib.aload(ownerClass);
+        ib.aload(1);
+        ib.invokeVirtual("java/lang/invoke/MethodType", "parameterArray", "()[Ljava/lang/Class;");
+        ib.invokeVirtual(
+                "java/lang/Class",
+                "getDeclaredConstructor",
+                "([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;");
+        ib.astore(constructor);
+        ib.aload(constructor);
+        ib.iconst1();
+        ib.invokeVirtual("java/lang/reflect/Constructor", "setAccessible", "(Z)V");
+
+        ib.invokeStatic(
+                "java/lang/invoke/MethodHandles",
+                "lookup",
+                "()Ljava/lang/invoke/MethodHandles$Lookup;");
+        ib.aload(constructor);
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "unreflectConstructor",
+                "(Ljava/lang/reflect/Constructor;)Ljava/lang/invoke/MethodHandle;");
+        ib.astore(handle);
+
+        ib.aload(handle);
+        ib.aload(2);
+        ib.invokeStatic("java/util/Arrays", "asList", "([Ljava/lang/Object;)Ljava/util/List;");
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandle",
+                "invokeWithArguments",
+                "(Ljava/util/List;)Ljava/lang/Object;");
+        ib.label(end);
+        ib.areturn();
+
+        ib.label(handler);
         ib.astore(exception);
         ib.aload(exception);
         ib.invokeStatic(className(), "rethrow", "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;");

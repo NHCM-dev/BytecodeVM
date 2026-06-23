@@ -71,4 +71,9 @@ public enum NumericType
             case DOUBLE: ib.dstore(local); break;
         }
     }
+
+    public int stackWidth()
+    {
+        return this == LONG || this == DOUBLE ? 2 : 1;
+    }
 }

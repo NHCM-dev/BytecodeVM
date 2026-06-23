@@ -12,6 +12,19 @@ public final class InterpretContext
     public static final int OPCODE = 4;
     public static final int RIGHT_VALUE = 5;
     public static final int LEFT_VALUE = 7;
+    public static final int MIDDLE_VALUE = 24;
+    public static final int DUP_VALUE_1 = 24;
+    public static final int DUP_VALUE_2 = 25;
+    public static final int DUP_VALUE_3 = 26;
+    public static final int DUP_VALUE_4 = 27;
+    public static final int DUP_WIDTH_1 = 28;
+    public static final int DUP_WIDTH_2 = 29;
+    public static final int DUP_WIDTH_3 = 30;
+    public static final int DUP_WIDTH_4 = 31;
+    public static final int FIELD_OWNER = 32;
+    public static final int FIELD_NAME = 33;
+    public static final int FIELD_DESCRIPTOR = 34;
+    public static final int FIELD_RESULT = 35;
     public static final int JUMP_TARGET = 9;
     public static final int SWITCH_KEY = 10;
     public static final int SWITCH_MIN = 11;
@@ -25,6 +38,8 @@ public final class InterpretContext
     public static final int INVOKE_INDEX = 19;
     public static final int INVOKE_RECEIVER = 20;
     public static final int INVOKE_RESULT = 21;
+    public static final int FIELD_VALUE = 22;
+    public static final int FIELD_RECEIVER = 23;
 
     public final String vmClassName;
     public final String frameClassName;

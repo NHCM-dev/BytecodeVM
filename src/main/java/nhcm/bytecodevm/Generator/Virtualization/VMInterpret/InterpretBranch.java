@@ -3,6 +3,7 @@ package nhcm.bytecodevm.Generator.Virtualization.VMInterpret;
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
 import org.objectweb.asm.tree.InsnList;
+import org.objectweb.asm.tree.LabelNode;
 
 import java.util.Set;
 
@@ -84,9 +85,18 @@ public abstract class InterpretBranch
     /** Pushes the Object currently on top of the generated JVM operand stack. */
     protected static void pushObject(InsnBuilder ib, InterpretContext context)
     {
+        pushObjectWithWidth(ib, context, 1);
+    }
+
+    protected static void pushObjectWithWidth(
+            InsnBuilder ib,
+            InterpretContext context,
+            int width)
+    {
         context.loadFrame(ib);
         ib.swap();
-        context.invokeFramePush(ib);
+        ib.pushInt(width);
+        ib.invokeVirtual(context.frameClassName, "push", "(Ljava/lang/Object;I)V");
     }
 
     protected static void pushObject(InsnBuilder ib, InterpretContext context, int local)
@@ -95,11 +105,23 @@ public abstract class InterpretBranch
         pushObject(ib, context);
     }
 
+    protected static void pushObjectWithWidth(
+            InsnBuilder ib,
+            InterpretContext context,
+            int objectLocal,
+            int widthLocal)
+    {
+        context.loadFrame(ib);
+        ib.aload(objectLocal);
+        ib.iload(widthLocal);
+        ib.invokeVirtual(context.frameClassName, "push", "(Ljava/lang/Object;I)V");
+    }
+
     /** Boxes and pushes the primitive currently on top of the JVM operand stack. */
     protected static void pushNumber(InsnBuilder ib, InterpretContext context, NumericType type)
     {
         type.box(ib);
-        pushObject(ib, context);
+        pushObjectWithWidth(ib, context, type.stackWidth());
     }
 
     protected static void pushNumber(InsnBuilder ib, InterpretContext context, NumericType type, int local)
@@ -146,5 +168,12 @@ public abstract class InterpretBranch
     protected static void pushDouble(InsnBuilder ib, InterpretContext context, int local)
     {
         pushNumber(ib, context, NumericType.DOUBLE, local);
+    }
+
+    protected static void jumpIfCategory2(InsnBuilder ib, int widthLocal, LabelNode target)
+    {
+        ib.iload(widthLocal);
+        ib.iconst2();
+        ib.ifIcmpEq(target);
     }
 }

@@ -6,6 +6,7 @@ import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretContext;
 import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
 import org.objectweb.asm.tree.InsnList;
+import org.objectweb.asm.tree.LabelNode;
 
 import java.util.Set;
 
@@ -22,8 +23,18 @@ public class PopBranch extends InterpretBranch
     {
         InsnBuilder ib = new InsnBuilder();
         context.loadFrame(ib);
-        ib.invokeVirtual(context.frameClassName, "pop", "()Ljava/lang/Object;");
-        ib.pop();
+        ib.invokeVirtual(context.frameClassName, "peekWidth", "()I");
+        ib.istore(InterpretContext.DUP_WIDTH_1);
+        popObject(ib, context, InterpretContext.DUP_VALUE_1);
+
+        if (opcode == Opcs.POP2)
+        {
+            LabelNode done = new LabelNode();
+            jumpIfCategory2(ib, InterpretContext.DUP_WIDTH_1, done);
+            popObject(ib, context);
+            ib.pop();
+            ib.label(done);
+        }
         return ib.toInsnList();
     }
 }
