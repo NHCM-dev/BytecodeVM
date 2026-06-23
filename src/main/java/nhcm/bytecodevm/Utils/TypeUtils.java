@@ -2,6 +2,7 @@ package nhcm.bytecodevm.Utils;
 
 import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
 import org.objectweb.asm.Type;
+import org.objectweb.asm.tree.LabelNode;
 
 public class TypeUtils
 {
@@ -101,28 +102,11 @@ public class TypeUtils
                 return;
 
             case Type.BOOLEAN:
-                builder.checkCast("java/lang/Boolean");
-                builder.invokeVirtual("java/lang/Boolean", "booleanValue", "()Z");
-                break;
-
             case Type.BYTE:
-                builder.checkCast("java/lang/Byte");
-                builder.invokeVirtual("java/lang/Byte", "byteValue", "()B");
-                break;
-
             case Type.CHAR:
-                builder.checkCast("java/lang/Character");
-                builder.invokeVirtual("java/lang/Character", "charValue", "()C");
-                break;
-
             case Type.SHORT:
-                builder.checkCast("java/lang/Short");
-                builder.invokeVirtual("java/lang/Short", "shortValue", "()S");
-                break;
-
             case Type.INT:
-                builder.checkCast("java/lang/Integer");
-                builder.invokeVirtual("java/lang/Integer", "intValue", "()I");
+                unboxIntLike(builder);
                 break;
 
             case Type.LONG:
@@ -145,6 +129,34 @@ public class TypeUtils
                 builder.checkCast(type.getInternalName());
                 break;
         }
+    }
+
+    public static void unboxIntLike(InsnBuilder builder)
+    {
+        LabelNode notBoolean = new LabelNode();
+        LabelNode notCharacter = new LabelNode();
+        LabelNode done = new LabelNode();
+
+        builder.dup();
+        builder.instanceOf("java/lang/Boolean");
+        builder.ifeq(notBoolean);
+        builder.checkCast("java/lang/Boolean");
+        builder.invokeVirtual("java/lang/Boolean", "booleanValue", "()Z");
+        builder.goto_(done);
+
+        builder.label(notBoolean);
+        builder.dup();
+        builder.instanceOf("java/lang/Character");
+        builder.ifeq(notCharacter);
+        builder.checkCast("java/lang/Character");
+        builder.invokeVirtual("java/lang/Character", "charValue", "()C");
+        builder.goto_(done);
+
+        builder.label(notCharacter);
+        builder.checkCast("java/lang/Number");
+        builder.invokeVirtual("java/lang/Number", "intValue", "()I");
+
+        builder.label(done);
     }
 
     public static void returnValue(

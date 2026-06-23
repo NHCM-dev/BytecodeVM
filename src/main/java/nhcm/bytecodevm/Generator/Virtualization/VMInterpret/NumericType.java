@@ -2,6 +2,7 @@ package nhcm.bytecodevm.Generator.Virtualization.VMInterpret;
 
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
+import nhcm.bytecodevm.Utils.TypeUtils;
 
 public enum NumericType
 {
@@ -41,6 +42,11 @@ public enum NumericType
 
     public void unbox(InsnBuilder ib)
     {
+        if (this == INT)
+        {
+            TypeUtils.unboxIntLike(ib);
+            return;
+        }
         ib.checkCast(wrapper);
         ib.invokeVirtual(wrapper, unboxMethod, unboxDescriptor);
     }

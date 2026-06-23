@@ -5,6 +5,7 @@ import nhcm.bytecodevm.Enums.VMOpcode;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretContext;
 import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
+import nhcm.bytecodevm.Utils.TypeUtils;
 import org.objectweb.asm.tree.InsnList;
 
 import java.util.Set;
@@ -35,14 +36,13 @@ public class IncrementBranch extends InterpretBranch
         context.nextToken(ib);
         ib.istore(InterpretContext.LEFT_VALUE);
 
-        // frame.locals[localIndex] = (Integer) frame.locals[localIndex] + increment;
+        // frame.locals[localIndex] = intValue(frame.locals[localIndex]) + increment;
         context.loadFrame(ib);
         ib.getField(context.frameClassName, "locals", "[Ljava/lang/Object;");
         ib.iload(InterpretContext.RIGHT_VALUE);
         ib.dup2();
         ib.aaload();
-        ib.checkCast("java/lang/Integer");
-        ib.invokeVirtual("java/lang/Integer", "intValue", "()I");
+        TypeUtils.unboxIntLike(ib);
         ib.iload(InterpretContext.LEFT_VALUE);
         ib.iadd();
         ib.invokeStatic("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;");

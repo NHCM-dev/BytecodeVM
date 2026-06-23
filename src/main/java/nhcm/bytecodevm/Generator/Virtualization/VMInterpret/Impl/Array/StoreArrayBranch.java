@@ -5,6 +5,7 @@ import nhcm.bytecodevm.Enums.VMOpcode;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretContext;
 import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
+import nhcm.bytecodevm.Utils.TypeUtils;
 import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.LabelNode;
 
@@ -69,8 +70,7 @@ public class StoreArrayBranch extends InterpretBranch
             ib.checkCast("[Z");
             ib.iload(InterpretContext.MIDDLE_VALUE);
             ib.aload(InterpretContext.LEFT_VALUE);
-            ib.checkCast("java/lang/Integer");
-            ib.invokeVirtual("java/lang/Integer", "intValue", "()I");
+            TypeUtils.unboxIntLike(ib);
 
             ib.ifeq(falseValue);
             ib.iconst1();
