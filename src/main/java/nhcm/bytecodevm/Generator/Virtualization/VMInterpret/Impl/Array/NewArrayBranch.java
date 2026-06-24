@@ -161,8 +161,8 @@ public class NewArrayBranch extends InterpretBranch
     {
         ib.aload(InterpretContext.CONSTANTS);
         context.nextToken(ib);
-        ib.invokeStatic(context.vmClassName, "constantString", "([Ljava/lang/Object;I)Ljava/lang/String;");
-        ib.invokeStatic(context.vmClassName, "loadOwner", "(Ljava/lang/String;)Ljava/lang/Class;");
+        context.vm.constantString.invokeStatic(ib);
+        context.vm.loadOwner.invokeStatic(ib);
     }
 
     private static void emitPrimitiveClass(InsnBuilder ib, LabelNode label, String boxedOwner, LabelNode create)

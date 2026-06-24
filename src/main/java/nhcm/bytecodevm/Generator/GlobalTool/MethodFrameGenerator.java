@@ -15,20 +15,23 @@ public class MethodFrameGenerator extends ClassObj
 {
     @Getter
     public final ClassNode classNode;
+    @Getter
+    public final MethodFrameLayout layout;
 
     public MethodFrameGenerator(String className) {
         super(className);
+        this.layout = new MethodFrameLayout(className);
         ClassNode cn = ClassUtils.newClassNode(new Acc[]{Acc.PUBLIC}, className);
         List<FieldNode> fields = cn.fields;
-        fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PUBLIC, Acc.FINAL}, "locals", "[Ljava/lang/Object;"));
-        fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PUBLIC, Acc.FINAL}, "stack", "[Ljava/lang/Object;"));
-        fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PUBLIC, Acc.FINAL}, "stackWords", "[J"));
-        fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PUBLIC, Acc.FINAL}, "stackTypes", "[I"));
-        fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PUBLIC, Acc.FINAL}, "stackWidths", "[I"));
-        fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PUBLIC}, "programCounter", "I"));
-        fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PUBLIC}, "stackPointer", "I"));
-        fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PUBLIC}, "returnValue", "Ljava/lang/Object;"));
-        fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PUBLIC}, "returned", "Z"));
+        fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PUBLIC, Acc.FINAL}, layout.locals.name(), layout.locals.descriptor()));
+        fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PUBLIC, Acc.FINAL}, layout.stack.name(), layout.stack.descriptor()));
+        fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PUBLIC, Acc.FINAL}, layout.stackWords.name(), layout.stackWords.descriptor()));
+        fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PUBLIC, Acc.FINAL}, layout.stackTypes.name(), layout.stackTypes.descriptor()));
+        fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PUBLIC, Acc.FINAL}, layout.stackWidths.name(), layout.stackWidths.descriptor()));
+        fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PUBLIC}, layout.programCounter.name(), layout.programCounter.descriptor()));
+        fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PUBLIC}, layout.stackPointer.name(), layout.stackPointer.descriptor()));
+        fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PUBLIC}, layout.returnValue.name(), layout.returnValue.descriptor()));
+        fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PUBLIC}, layout.returned.name(), layout.returned.descriptor()));
         cn.methods.add(this.genInitMethod(className));
         cn.methods.add(this.genPushMethod(className));
         cn.methods.add(this.genPushWithWidthMethod(className));

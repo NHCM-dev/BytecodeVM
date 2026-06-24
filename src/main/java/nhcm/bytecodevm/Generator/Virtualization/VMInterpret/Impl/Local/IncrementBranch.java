@@ -38,7 +38,7 @@ public class IncrementBranch extends InterpretBranch
 
         // frame.locals[localIndex] = intValue(frame.locals[localIndex]) + increment;
         context.loadFrame(ib);
-        ib.getField(context.frameClassName, "locals", "[Ljava/lang/Object;");
+        context.frame.locals.get(ib);
         ib.iload(InterpretContext.RIGHT_VALUE);
         ib.dup2();
         ib.aaload();

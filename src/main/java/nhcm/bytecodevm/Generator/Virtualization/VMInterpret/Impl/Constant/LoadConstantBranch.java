@@ -28,10 +28,7 @@ public class LoadConstantBranch extends InterpretBranch
         ib.astore(InterpretContext.DUP_VALUE_1);
         ib.aload(InterpretContext.DUP_VALUE_1);
         context.loadFrame(ib);
-        ib.invokeStatic(
-                context.vmClassName,
-                "resolveConstant",
-                "(Ljava/lang/Object;L" + context.frameClassName + ";)Ljava/lang/Object;");
+        context.vm.resolveConstant.invokeStatic(ib);
         ib.astore(InterpretContext.DUP_VALUE_1);
 
         LabelNode category2 = new LabelNode();

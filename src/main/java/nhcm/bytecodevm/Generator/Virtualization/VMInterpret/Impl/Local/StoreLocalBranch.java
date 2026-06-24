@@ -22,7 +22,7 @@ public class StoreLocalBranch extends InterpretBranch
     {
         InsnBuilder ib = new InsnBuilder();
         context.loadFrame(ib);
-        ib.getField(context.frameClassName, "locals", "[Ljava/lang/Object;");
+        context.frame.locals.get(ib);
         context.nextToken(ib);
         popObject(ib, context);
         ib.aastore();

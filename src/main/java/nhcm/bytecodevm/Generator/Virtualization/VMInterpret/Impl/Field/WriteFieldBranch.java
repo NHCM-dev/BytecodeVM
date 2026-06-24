@@ -54,14 +54,7 @@ public class WriteFieldBranch extends InterpretBranch
         ib.aload(InterpretContext.FIELD_RECEIVER);
         ib.aload(InterpretContext.FIELD_VALUE);
 
-        ib.invokeStatic(
-                context.vmClassName,
-                "setField",
-                "(Ljava/lang/String;" +
-                "Ljava/lang/String;" +
-                "Ljava/lang/String;" +
-                "ZLjava/lang/Object;" +
-                "Ljava/lang/Object;)V");
+        context.vm.setField.invokeStatic(ib);
 
         return ib.toInsnList();
     }
@@ -72,9 +65,6 @@ public class WriteFieldBranch extends InterpretBranch
     {
         ib.aload(InterpretContext.CONSTANTS);
         context.nextToken(ib);
-        ib.invokeStatic(
-                context.vmClassName,
-                "constantString",
-                "([Ljava/lang/Object;I)Ljava/lang/String;");
+        context.vm.constantString.invokeStatic(ib);
     }
 }

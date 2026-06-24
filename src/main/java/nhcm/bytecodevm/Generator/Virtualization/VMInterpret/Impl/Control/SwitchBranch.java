@@ -122,6 +122,6 @@ public class SwitchBranch extends InterpretBranch
     {
         context.loadFrame(ib);
         ib.iload(InterpretContext.JUMP_TARGET);
-        ib.putField(context.frameClassName, "programCounter", "I");
+        context.frame.programCounter.put(ib);
     }
 }

@@ -185,7 +185,7 @@ public class DuplicateBranch extends InterpretBranch
     private static void pop(InsnBuilder ib, InterpretContext context, int local)
     {
         context.loadFrame(ib);
-        ib.invokeVirtual(context.frameClassName, "peekWidth", "()I");
+        context.frame.peekWidth.invokeVirtual(ib);
         ib.istore(widthLocal(local));
         popObject(ib, context, local);
     }

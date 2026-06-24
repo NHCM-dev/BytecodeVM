@@ -29,10 +29,7 @@ public class InvokeNormalBranch extends InterpretBranch
         ib.astore(InterpretContext.INVOKE_NAME);
 
         readConstantString(ib, context);
-        ib.invokeStatic(
-                context.vmClassName,
-                "methodType",
-                "(Ljava/lang/String;)Ljava/lang/invoke/MethodType;");
+        context.vm.methodType.invokeStatic(ib);
         ib.astore(InterpretContext.INVOKE_TYPE);
 
         // The interface flag is compile-time metadata; the runtime helper resolves
@@ -93,11 +90,7 @@ public class InvokeNormalBranch extends InterpretBranch
         }
         ib.aload(InterpretContext.INVOKE_RECEIVER);
         ib.aload(InterpretContext.INVOKE_ARGUMENTS);
-        ib.invokeStatic(
-                context.vmClassName,
-                "invoke",
-                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/invoke/MethodType;" +
-                        "ZLjava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
+        context.vm.invoke.invokeStatic(ib);
         ib.astore(InterpretContext.INVOKE_RESULT);
         pushResultUnlessVoid(ib, context);
         return ib.toInsnList();
@@ -108,19 +101,13 @@ public class InvokeNormalBranch extends InterpretBranch
         ib.aload(InterpretContext.INVOKE_OWNER);
         ib.aload(InterpretContext.INVOKE_TYPE);
         ib.aload(InterpretContext.INVOKE_ARGUMENTS);
-        ib.invokeStatic(
-                context.vmClassName,
-                "construct",
-                "(Ljava/lang/String;Ljava/lang/invoke/MethodType;[Ljava/lang/Object;)Ljava/lang/Object;");
+        context.vm.construct.invokeStatic(ib);
         ib.astore(InterpretContext.INVOKE_RESULT);
 
         context.loadFrame(ib);
         ib.aload(InterpretContext.INVOKE_RECEIVER);
         ib.aload(InterpretContext.INVOKE_RESULT);
-        ib.invokeVirtual(
-                context.frameClassName,
-                "replaceIdentity",
-                "(Ljava/lang/Object;Ljava/lang/Object;)V");
+        context.frame.replaceIdentity.invokeVirtual(ib);
     }
 
     private static void pushResultUnlessVoid(InsnBuilder ib, InterpretContext context)
@@ -154,9 +141,6 @@ public class InvokeNormalBranch extends InterpretBranch
     {
         ib.aload(InterpretContext.CONSTANTS);
         context.nextToken(ib);
-        ib.invokeStatic(
-                context.vmClassName,
-                "constantString",
-                "([Ljava/lang/Object;I)Ljava/lang/String;");
+        context.vm.constantString.invokeStatic(ib);
     }
 }

@@ -14,16 +14,19 @@ public class VMProgramGenerator extends ClassObj
 {
     @Getter
     public final ClassNode classNode;
+    @Getter
+    public final VMProgramLayout layout;
 
     public VMProgramGenerator(String className)
     {
         super(className);
+        this.layout = new VMProgramLayout(className);
         ClassNode cn = ClassUtils.newClassNode(new Acc[]{Acc.PUBLIC, Acc.FINAL}, className);
-        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.FINAL}, "code", "[I"));
-        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.FINAL}, "constants", "[Ljava/lang/Object;"));
-        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.FINAL}, "exceptionHandlers", "[I"));
-        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.FINAL}, "maxLocals", "I"));
-        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.FINAL}, "maxStack", "I"));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.FINAL}, layout.codeField.name(), layout.codeField.descriptor()));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.FINAL}, layout.constantsField.name(), layout.constantsField.descriptor()));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.FINAL}, layout.exceptionHandlersField.name(), layout.exceptionHandlersField.descriptor()));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.FINAL}, layout.maxLocalsField.name(), layout.maxLocalsField.descriptor()));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.FINAL}, layout.maxStackField.name(), layout.maxStackField.descriptor()));
         cn.methods.add(generateConstructor());
         cn.methods.add(generateObjectGetter("code", "[I"));
         cn.methods.add(generateObjectGetter("constants", "[Ljava/lang/Object;"));
@@ -35,7 +38,7 @@ public class VMProgramGenerator extends ClassObj
 
     public String constructorDescriptor()
     {
-        return "([I[Ljava/lang/Object;[III)V";
+        return layout.init.descriptor();
     }
 
     private MethodNode generateConstructor()
@@ -49,19 +52,19 @@ public class VMProgramGenerator extends ClassObj
         ib.invokeSpecial("java/lang/Object", "<init>", "()V");
         ib.aload(0);
         ib.aload(1);
-        ib.putField(className(), "code", "[I");
+        layout.codeField.put(ib);
         ib.aload(0);
         ib.aload(2);
-        ib.putField(className(), "constants", "[Ljava/lang/Object;");
+        layout.constantsField.put(ib);
         ib.aload(0);
         ib.aload(3);
-        ib.putField(className(), "exceptionHandlers", "[I");
+        layout.exceptionHandlersField.put(ib);
         ib.aload(0);
         ib.iload(4);
-        ib.putField(className(), "maxLocals", "I");
+        layout.maxLocalsField.put(ib);
         ib.aload(0);
         ib.iload(5);
-        ib.putField(className(), "maxStack", "I");
+        layout.maxStackField.put(ib);
         ib._return();
         return method;
     }

@@ -36,11 +36,11 @@ public class ReturnBranch extends InterpretBranch
         {
             popObject(ib, context);
         }
-        ib.putField(context.frameClassName, "returnValue", "Ljava/lang/Object;");
+        context.frame.returnValue.put(ib);
 
         context.loadFrame(ib);
         ib.iconst1();
-        ib.putField(context.frameClassName, "returned", "Z");
+        context.frame.returned.put(ib);
 
         ib._return();
         return ib.toInsnList();

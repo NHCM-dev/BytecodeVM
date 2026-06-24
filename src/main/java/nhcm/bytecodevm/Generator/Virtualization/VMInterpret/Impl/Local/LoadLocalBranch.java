@@ -22,7 +22,7 @@ public class LoadLocalBranch extends InterpretBranch
     {
         InsnBuilder ib = new InsnBuilder();
         context.loadFrame(ib);
-        ib.getField(context.frameClassName, "locals", "[Ljava/lang/Object;");
+        context.frame.locals.get(ib);
         context.nextToken(ib);
         ib.aaload();
         if (opcode == Opcs.LLOAD || opcode == Opcs.DLOAD)

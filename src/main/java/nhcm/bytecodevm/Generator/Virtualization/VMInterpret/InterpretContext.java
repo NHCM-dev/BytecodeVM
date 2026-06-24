@@ -1,5 +1,7 @@
 package nhcm.bytecodevm.Generator.Virtualization.VMInterpret;
 
+import nhcm.bytecodevm.Generator.GlobalTool.MethodFrameLayout;
+import nhcm.bytecodevm.Generator.Virtualization.VMRuntimeLayout;
 import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
 import org.objectweb.asm.tree.LabelNode;
 
@@ -56,12 +58,16 @@ public final class InterpretContext
 
     public final String vmClassName;
     public final String frameClassName;
+    public final MethodFrameLayout frame;
+    public final VMRuntimeLayout vm;
     public final LabelNode loopStart;
 
     public InterpretContext(String vmClassName, String frameClassName, LabelNode loopStart)
     {
         this.vmClassName = vmClassName;
         this.frameClassName = frameClassName;
+        this.frame = new MethodFrameLayout(frameClassName);
+        this.vm = new VMRuntimeLayout(vmClassName, "L" + frameClassName + ";");
         this.loopStart = loopStart;
     }
 
@@ -73,7 +79,7 @@ public final class InterpretContext
     public void popObject(InsnBuilder ib)
     {
         loadFrame(ib);
-        ib.invokeVirtual(frameClassName, "pop", "()Ljava/lang/Object;");
+        frame.pop.invokeVirtual(ib);
     }
 
     public void popNumber(InsnBuilder ib, NumericType type, int local)
@@ -85,7 +91,7 @@ public final class InterpretContext
 
     public void invokeFramePush(InsnBuilder ib)
     {
-        ib.invokeVirtual(frameClassName, "push", "(Ljava/lang/Object;)V");
+        frame.push.invokeVirtual(ib);
     }
 
     public void nextToken(InsnBuilder ib)
@@ -93,11 +99,11 @@ public final class InterpretContext
         ib.aload(CODE);
         loadFrame(ib);
         ib.dup();
-        ib.getField(frameClassName, "programCounter", "I");
+        frame.programCounter.get(ib);
         ib.dupX1();
         ib.iconst1();
         ib.iadd();
-        ib.putField(frameClassName, "programCounter", "I");
+        frame.programCounter.put(ib);
         ib.iaload();
     }
 }

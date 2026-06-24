@@ -25,8 +25,8 @@ public class MonitorBranch extends InterpretBranch
 
         switch (opcode)
         {
-            case MONITORENTER -> ib.invokeStatic(context.vmClassName, "monitorEnter", "(Ljava/lang/Object;)V");
-            case MONITOREXIT -> ib.invokeStatic(context.vmClassName, "monitorExit", "(Ljava/lang/Object;)V");
+            case MONITORENTER -> context.vm.monitorEnter.invokeStatic(ib);
+            case MONITOREXIT -> context.vm.monitorExit.invokeStatic(ib);
             default -> throw new IllegalArgumentException("Unsupported monitor opcode: " + opcode);
         }
 

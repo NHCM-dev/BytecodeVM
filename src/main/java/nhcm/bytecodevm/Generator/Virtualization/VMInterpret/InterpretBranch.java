@@ -183,9 +183,9 @@ public abstract class InterpretBranch
     {
         emitPushObjectPrefix(ib, context, objectLocal);
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stackWidths", "[I");
+        context.frame.stackWidths.get(ib);
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stackPointer", "I");
+        context.frame.stackPointer.get(ib);
         ib.iload(widthLocal);
         ib.iastore();
         emitPushSuffix(ib, context);
@@ -197,9 +197,9 @@ public abstract class InterpretBranch
         type.store(ib, InterpretContext.RIGHT_VALUE);
         emitPushWordPrefix(ib, context);
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stackWords", "[J");
+        context.frame.stackWords.get(ib);
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stackPointer", "I");
+        context.frame.stackPointer.get(ib);
         type.load(ib, InterpretContext.RIGHT_VALUE);
         switch (type)
         {
@@ -277,9 +277,9 @@ public abstract class InterpretBranch
     {
         emitPushObjectPrefix(ib, context, objectLocal);
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stackWidths", "[I");
+        context.frame.stackWidths.get(ib);
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stackPointer", "I");
+        context.frame.stackPointer.get(ib);
         ib.pushInt(width);
         ib.iastore();
         emitPushSuffix(ib, context);
@@ -291,16 +291,16 @@ public abstract class InterpretBranch
             int objectLocal)
     {
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stack", "[Ljava/lang/Object;");
+        context.frame.stack.get(ib);
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stackPointer", "I");
+        context.frame.stackPointer.get(ib);
         ib.aload(objectLocal);
         ib.aastore();
 
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stackTypes", "[I");
+        context.frame.stackTypes.get(ib);
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stackPointer", "I");
+        context.frame.stackPointer.get(ib);
         ib.iconst0();
         ib.iastore();
     }
@@ -310,9 +310,9 @@ public abstract class InterpretBranch
             InterpretContext context)
     {
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stack", "[Ljava/lang/Object;");
+        context.frame.stack.get(ib);
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stackPointer", "I");
+        context.frame.stackPointer.get(ib);
         ib.aconstNull();
         ib.aastore();
     }
@@ -323,16 +323,16 @@ public abstract class InterpretBranch
             NumericType type)
     {
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stackTypes", "[I");
+        context.frame.stackTypes.get(ib);
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stackPointer", "I");
+        context.frame.stackPointer.get(ib);
         ib.pushInt(typeTag(type));
         ib.iastore();
 
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stackWidths", "[I");
+        context.frame.stackWidths.get(ib);
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stackPointer", "I");
+        context.frame.stackPointer.get(ib);
         ib.pushInt(type.stackWidth());
         ib.iastore();
 
@@ -345,10 +345,10 @@ public abstract class InterpretBranch
     {
         ib.aload(InterpretContext.FRAME);
         ib.dup();
-        ib.getField(context.frameClassName, "stackPointer", "I");
+        context.frame.stackPointer.get(ib);
         ib.iconst1();
         ib.iadd();
-        ib.putField(context.frameClassName, "stackPointer", "I");
+        context.frame.stackPointer.put(ib);
     }
 
     private static void emitRawPopIndexAndType(
@@ -356,29 +356,29 @@ public abstract class InterpretBranch
             InterpretContext context)
     {
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stackPointer", "I");
+        context.frame.stackPointer.get(ib);
         ib.iconst1();
         ib.isub();
         ib.istore(InterpretContext.STACK_INDEX);
 
         ib.aload(InterpretContext.FRAME);
         ib.iload(InterpretContext.STACK_INDEX);
-        ib.putField(context.frameClassName, "stackPointer", "I");
+        context.frame.stackPointer.put(ib);
 
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stackTypes", "[I");
+        context.frame.stackTypes.get(ib);
         ib.iload(InterpretContext.STACK_INDEX);
         ib.iaload();
         ib.istore(InterpretContext.STACK_TYPE);
 
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stackTypes", "[I");
+        context.frame.stackTypes.get(ib);
         ib.iload(InterpretContext.STACK_INDEX);
         ib.iconst0();
         ib.iastore();
 
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stackWidths", "[I");
+        context.frame.stackWidths.get(ib);
         ib.iload(InterpretContext.STACK_INDEX);
         ib.iconst0();
         ib.iastore();
@@ -389,13 +389,13 @@ public abstract class InterpretBranch
             InterpretContext context)
     {
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stack", "[Ljava/lang/Object;");
+        context.frame.stack.get(ib);
         ib.iload(InterpretContext.STACK_INDEX);
         ib.aaload();
         ib.astore(InterpretContext.STACK_OBJECT);
 
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stack", "[Ljava/lang/Object;");
+        context.frame.stack.get(ib);
         ib.iload(InterpretContext.STACK_INDEX);
         ib.aconstNull();
         ib.aastore();
@@ -406,7 +406,7 @@ public abstract class InterpretBranch
             InterpretContext context)
     {
         ib.aload(InterpretContext.FRAME);
-        ib.getField(context.frameClassName, "stackWords", "[J");
+        context.frame.stackWords.get(ib);
         ib.iload(InterpretContext.STACK_INDEX);
         ib.laload();
     }

@@ -105,6 +105,11 @@ public class InsnBuilder
         ));
     }
 
+    public void getStatic(FieldRef field)
+    {
+        getStatic(field.owner(), field.name(), field.descriptor());
+    }
+
     public void putStatic(String owner, String name, String desc)
     {
         insns.add(new FieldInsnNode(
@@ -113,6 +118,11 @@ public class InsnBuilder
                 name,
                 desc
         ));
+    }
+
+    public void putStatic(FieldRef field)
+    {
+        putStatic(field.owner(), field.name(), field.descriptor());
     }
 
     public void getField(String owner, String name, String desc)
@@ -125,6 +135,11 @@ public class InsnBuilder
         ));
     }
 
+    public void getField(FieldRef field)
+    {
+        getField(field.owner(), field.name(), field.descriptor());
+    }
+
     public void putField(String owner, String name, String desc)
     {
         insns.add(new FieldInsnNode(
@@ -133,6 +148,11 @@ public class InsnBuilder
                 name,
                 desc
         ));
+    }
+
+    public void putField(FieldRef field)
+    {
+        putField(field.owner(), field.name(), field.descriptor());
     }
 
     public void invokeVirtual(
@@ -149,6 +169,11 @@ public class InsnBuilder
         ));
     }
 
+    public void invokeVirtual(MethodRef method)
+    {
+        invokeVirtual(method.owner(), method.name(), method.descriptor());
+    }
+
     public void invokeStatic(
             String owner,
             String name,
@@ -161,6 +186,11 @@ public class InsnBuilder
                 desc,
                 false
         ));
+    }
+
+    public void invokeStatic(MethodRef method)
+    {
+        invokeStatic(method.owner(), method.name(), method.descriptor());
     }
 
     public void invokeSpecial(
@@ -177,6 +207,11 @@ public class InsnBuilder
         ));
     }
 
+    public void invokeSpecial(MethodRef method)
+    {
+        invokeSpecial(method.owner(), method.name(), method.descriptor());
+    }
+
     public void invokeInterface(
             String owner,
             String name,
@@ -189,6 +224,11 @@ public class InsnBuilder
                 desc,
                 true
         ));
+    }
+
+    public void invokeInterface(MethodRef method)
+    {
+        invokeInterface(method.owner(), method.name(), method.descriptor());
     }
 
     public void new_(String type)

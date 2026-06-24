@@ -24,7 +24,7 @@ public class GotoBranch extends InterpretBranch
 
         context.loadFrame(ib);
         context.nextToken(ib);
-        ib.putField(context.frameClassName, "programCounter", "I");
+        context.frame.programCounter.put(ib);
 
         return ib.toInsnList();
     }

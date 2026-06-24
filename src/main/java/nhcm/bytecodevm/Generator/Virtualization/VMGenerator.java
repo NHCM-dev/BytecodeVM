@@ -6,8 +6,10 @@ import nhcm.bytecodevm.Enums.Acc;
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Generator.Abstract.ClassObj;
 import nhcm.bytecodevm.Generator.GlobalTool.MethodFrameGenerator;
+import nhcm.bytecodevm.Generator.GlobalTool.MethodFrameLayout;
 import nhcm.bytecodevm.Generator.GlobalTool.VMCodePoolGenerator;
 import nhcm.bytecodevm.Generator.GlobalTool.VMProgramGenerator;
+import nhcm.bytecodevm.Generator.GlobalTool.VMProgramLayout;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Array.ArrayLengthBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Array.LoadArrayBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Array.NewArrayBranch;
@@ -144,6 +146,9 @@ public class VMGenerator extends ClassObj
     private final MethodFrameGenerator methodFrameGenerator;
     private final VMProgramGenerator vmProgramGenerator;
     private final VMCodePoolGenerator vmCodePoolGenerator;
+    private final MethodFrameLayout frameLayout;
+    private final VMProgramLayout programLayout;
+    private final VMRuntimeLayout vmLayout;
     private final BytecodeVMConfig config;
 
     public VMGenerator(
@@ -161,16 +166,19 @@ public class VMGenerator extends ClassObj
         this.methodFrameGenerator = methodFrameGenerator;
         this.vmProgramGenerator = vmProgramGenerator;
         this.vmCodePoolGenerator = vmCodePoolGenerator;
+        this.frameLayout = methodFrameGenerator.getLayout();
+        this.programLayout = vmProgramGenerator.getLayout();
+        this.vmLayout = new VMRuntimeLayout(className, methodFrameGenerator.descriptor(), vmProgramGenerator.descriptor());
         this.config = config;
         ClassNode cn = ClassUtils.newClassNode(new Acc[]{Acc.PUBLIC, Acc.FINAL}, className);
         InsnUtils.addPrivateInit(cn);
         this.classNode = cn;
         String vmCodePoolSign = vmCodePoolGenerator.descriptor();
         cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "CODE_POOLS", "Ljava/util/List;", "Ljava/util/List<" + vmCodePoolSign + ">;"));
-        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "FIELD_HANDLES", "Ljava/util/Map;", "Ljava/util/Map<Ljava/lang/String;Ljava/lang/invoke/MethodHandle;>;"));
-        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "METHOD_HANDLES", "Ljava/util/Map;", "Ljava/util/Map<Ljava/lang/String;Ljava/lang/invoke/MethodHandle;>;"));
-        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "METHOD_TYPES", "Ljava/util/Map;", "Ljava/util/Map<Ljava/lang/String;Ljava/lang/invoke/MethodType;>;"));
-        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "MONITORS", "Ljava/util/Map;", "Ljava/util/Map<Ljava/lang/Object;Ljava/util/concurrent/locks/ReentrantLock;>;"));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, vmLayout.fieldHandles.name(), vmLayout.fieldHandles.descriptor(), "Ljava/util/Map<Ljava/lang/String;Ljava/lang/invoke/MethodHandle;>;"));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, vmLayout.methodHandles.name(), vmLayout.methodHandles.descriptor(), "Ljava/util/Map<Ljava/lang/String;Ljava/lang/invoke/MethodHandle;>;"));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, vmLayout.methodTypes.name(), vmLayout.methodTypes.descriptor(), "Ljava/util/Map<Ljava/lang/String;Ljava/lang/invoke/MethodType;>;"));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, vmLayout.monitors.name(), vmLayout.monitors.descriptor(), "Ljava/util/Map<Ljava/lang/Object;Ljava/util/concurrent/locks/ReentrantLock;>;"));
         cn.methods.add(genClInitMethod(codePoolGenerators));
         cn.methods.add(genExecuteMethod());
         cn.methods.add(genInterpretMethod());
@@ -202,19 +210,19 @@ public class VMGenerator extends ClassObj
 
     private MethodNode genInterpretMethod()
     {
-        MethodNode methodNode = MethodUtils.newMethodNode(new Acc[]{Acc.PRIVATE, Acc.STATIC}, "interpret", "(" + vmProgramGenerator.descriptor() + methodFrameGenerator.descriptor() + ")V");
+        MethodNode methodNode = MethodUtils.newMethodNode(new Acc[]{Acc.PRIVATE, Acc.STATIC}, vmLayout.interpret.name(), vmLayout.interpret.descriptor());
         InsnBuilder ib = new InsnBuilder(methodNode.instructions);
         // int[] code = program.code();
         ib.aload(InterpretContext.PROGRAM);
-        ib.invokeVirtual(vmProgramGenerator.className(), "code", "()[I");
+        programLayout.code.invokeVirtual(ib);
         ib.astore(InterpretContext.CODE);
         // Object[] constants = program.constants();
         ib.aload(InterpretContext.PROGRAM);
-        ib.invokeVirtual(vmProgramGenerator.className(), "constants", "()[Ljava/lang/Object;");
+        programLayout.constants.invokeVirtual(ib);
         ib.astore(InterpretContext.CONSTANTS);
         // int[] exceptionHandlers = program.exceptionHandlers();
         ib.aload(InterpretContext.PROGRAM);
-        ib.invokeVirtual(vmProgramGenerator.className(), "exceptionHandlers", "()[I");
+        programLayout.exceptionHandlers.invokeVirtual(ib);
         ib.astore(InterpretContext.EXCEPTION_HANDLERS);
 
         LabelNode loopStart = new LabelNode();
@@ -233,12 +241,12 @@ public class VMGenerator extends ClassObj
         // while (!frame.returned)
         ib.label(loopStart);
         ib.aload(InterpretContext.FRAME);
-        ib.getField(methodFrameGenerator.className(), "returned", "Z");
+        frameLayout.returned.get(ib);
         ib.ifne(loopEnd);
 
         // int instructionPc = frame.programCounter;
         ib.aload(InterpretContext.FRAME);
-        ib.getField(methodFrameGenerator.className(), "programCounter", "I");
+        frameLayout.programCounter.get(ib);
         ib.istore(InterpretContext.INSTRUCTION_PC);
 
         // int opcode = code[frame.programCounter++];
@@ -246,11 +254,11 @@ public class VMGenerator extends ClassObj
         ib.aload(InterpretContext.CODE);
         ib.aload(InterpretContext.FRAME);
         ib.dup();
-        ib.getField(methodFrameGenerator.className(), "programCounter", "I");
+        frameLayout.programCounter.get(ib);
         ib.dupX1();
         ib.iconst1();
         ib.iadd();
-        ib.putField(methodFrameGenerator.className(), "programCounter", "I");
+        frameLayout.programCounter.put(ib);
         ib.iaload();
         ib.istore(InterpretContext.OPCODE);
 
@@ -270,27 +278,24 @@ public class VMGenerator extends ClassObj
         ib.aload(InterpretContext.EXCEPTION_HANDLERS);
         ib.iload(InterpretContext.INSTRUCTION_PC);
         ib.aload(InterpretContext.CONSTANTS);
-        ib.invokeStatic(
-                className(),
-                "findExceptionHandler",
-                "(Ljava/lang/Throwable;[II[Ljava/lang/Object;)I");
+        vmLayout.findExceptionHandler.invokeStatic(ib);
         ib.istore(InterpretContext.HANDLER_PC);
         ib.iload(InterpretContext.HANDLER_PC);
         ib.iflt(noHandler);
         ib.aload(InterpretContext.FRAME);
         ib.iconst0();
-        ib.putField(methodFrameGenerator.className(), "stackPointer", "I");
+        frameLayout.stackPointer.put(ib);
         ib.aload(InterpretContext.FRAME);
         ib.aload(InterpretContext.THROWN);
-        ib.invokeVirtual(methodFrameGenerator.className(), "push", "(Ljava/lang/Object;)V");
+        frameLayout.push.invokeVirtual(ib);
         ib.aload(InterpretContext.FRAME);
         ib.iload(InterpretContext.HANDLER_PC);
-        ib.putField(methodFrameGenerator.className(), "programCounter", "I");
+        frameLayout.programCounter.put(ib);
         ib.goto_(loopStart);
 
         ib.label(noHandler);
         ib.aload(InterpretContext.THROWN);
-        ib.invokeStatic(className(), "rethrow", "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;");
+        vmLayout.rethrow.invokeStatic(ib);
         ib.athrow();
 
         ib.label(loopEnd);
@@ -385,7 +390,7 @@ public class VMGenerator extends ClassObj
 
         InterpretContext context = new InterpretContext(
                 className(),
-                methodFrameGenerator.className(),
+                frameLayout.owner,
                 done);
         for (int i = 0; i < opcodes.size(); i++)
         {
@@ -453,7 +458,7 @@ public class VMGenerator extends ClassObj
                 "append",
                 "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
         ib.aload(InterpretContext.FRAME);
-        ib.getField(methodFrameGenerator.className(), "programCounter", "I");
+        frameLayout.programCounter.get(ib);
         ib.iconst1();
         ib.isub();
         ib.invokeVirtual(
@@ -483,17 +488,17 @@ public class VMGenerator extends ClassObj
 
         // VMProgram program = resolve(codeId);
         ib.iload(codeId);
-        ib.invokeStatic(className(), "resolve", "(I)" + vmProgramGenerator.descriptor());
+        vmLayout.resolve.invokeStatic(ib);
         ib.astore(program);
 
         // MethodFrame frame = new MethodFrame(program.maxLocals(), program.maxStack());
-        ib.new_(methodFrameGenerator.className());
+        ib.new_(frameLayout.owner);
         ib.dup();
         ib.aload(program);
-        ib.invokeVirtual(vmProgramGenerator.className(), "maxLocals", "()I");
+        programLayout.maxLocals.invokeVirtual(ib);
         ib.aload(program);
-        ib.invokeVirtual(vmProgramGenerator.className(), "maxStack", "()I");
-        ib.invokeSpecial(methodFrameGenerator.className(), "<init>", "(II)V");
+        programLayout.maxStack.invokeVirtual(ib);
+        frameLayout.init.invokeSpecial(ib);
         ib.astore(frame);
 
         LabelNode staticMethod = new LabelNode();
@@ -503,7 +508,7 @@ public class VMGenerator extends ClassObj
         ib.aload(receiver);
         ib.ifNull(staticMethod);
         ib.aload(frame);
-        ib.getField(methodFrameGenerator.className(), "locals", "[Ljava/lang/Object;");
+        frameLayout.locals.get(ib);
         ib.iconst0();
         ib.aload(receiver);
         ib.aastore();
@@ -522,7 +527,7 @@ public class VMGenerator extends ClassObj
         ib.aload(arguments);
         ib.iconst0();
         ib.aload(frame);
-        ib.getField(methodFrameGenerator.className(), "locals", "[Ljava/lang/Object;");
+        frameLayout.locals.get(ib);
         ib.iload(argumentOffset);
         ib.aload(arguments);
         ib.arrayLength();
@@ -534,14 +539,10 @@ public class VMGenerator extends ClassObj
         // interpret(program, frame);
         ib.aload(program);
         ib.aload(frame);
-        ib.invokeStatic(
-                className(),
-                "interpret",
-                "(" + vmProgramGenerator.descriptor() +
-                        methodFrameGenerator.descriptor() + ")V");
+        vmLayout.interpret.invokeStatic(ib);
 
         ib.aload(frame);
-        ib.getField(methodFrameGenerator.className(), "returnValue", "Ljava/lang/Object;");
+        frameLayout.returnValue.get(ib);
         ib.areturn();
         return methodNode;
     }
@@ -550,8 +551,8 @@ public class VMGenerator extends ClassObj
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
-                "resolve",
-                "(I)" + vmProgramGenerator.descriptor());
+                vmLayout.resolve.name(),
+                vmLayout.resolve.descriptor());
         InsnBuilder ib = new InsnBuilder(method.instructions);
         int resolved = 1;
         int iterator = 2;
@@ -559,7 +560,7 @@ public class VMGenerator extends ClassObj
 
         ib.aconstNull();
         ib.astore(resolved);
-        ib.getStatic(className(), "CODE_POOLS", "Ljava/util/List;");
+        vmLayout.codePools.getStatic(ib);
         ib.invokeInterface("java/util/List", "iterator", "()Ljava/util/Iterator;");
         ib.astore(iterator);
 
@@ -605,8 +606,8 @@ public class VMGenerator extends ClassObj
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
-                "constantString",
-                "([Ljava/lang/Object;I)Ljava/lang/String;");
+                vmLayout.constantString.name(),
+                vmLayout.constantString.descriptor());
         InsnBuilder ib = new InsnBuilder(method.instructions);
         ib.aload(0);
         ib.iload(1);
@@ -620,12 +621,12 @@ public class VMGenerator extends ClassObj
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
-                "methodType",
-                "(Ljava/lang/String;)Ljava/lang/invoke/MethodType;");
+                vmLayout.methodType.name(),
+                vmLayout.methodType.descriptor());
         InsnBuilder ib = new InsnBuilder(method.instructions);
         int cached = 1;
 
-        ib.getStatic(className(), "METHOD_TYPES", "Ljava/util/Map;");
+        vmLayout.methodTypes.getStatic(ib);
         ib.aload(0);
         ib.invokeInterface("java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
         ib.checkCast("java/lang/invoke/MethodType");
@@ -646,7 +647,7 @@ public class VMGenerator extends ClassObj
                 "fromMethodDescriptorString",
                 "(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType;");
         ib.astore(cached);
-        ib.getStatic(className(), "METHOD_TYPES", "Ljava/util/Map;");
+        vmLayout.methodTypes.getStatic(ib);
         ib.aload(0);
         ib.aload(cached);
         ib.invokeInterface("java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
@@ -660,8 +661,8 @@ public class VMGenerator extends ClassObj
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
-                "resolveConstant",
-                "(Ljava/lang/Object;" + methodFrameGenerator.descriptor() + ")Ljava/lang/Object;");
+                vmLayout.resolveConstant.name(),
+                vmLayout.resolveConstant.descriptor());
         InsnBuilder ib = new InsnBuilder(method.instructions);
         int encoded = 2;
         int descriptor = 3;
@@ -705,11 +706,11 @@ public class VMGenerator extends ClassObj
         ib.invokeVirtual("java/lang/Class", "getClassLoader", "()Ljava/lang/ClassLoader;");
         ib.astore(loader);
         ib.aload(1);
-        ib.getField(methodFrameGenerator.className(), "locals", "[Ljava/lang/Object;");
+        frameLayout.locals.get(ib);
         ib.arrayLength();
         ib.ifle(loaderReady);
         ib.aload(1);
-        ib.getField(methodFrameGenerator.className(), "locals", "[Ljava/lang/Object;");
+        frameLayout.locals.get(ib);
         ib.iconst0();
         ib.aaload();
         ib.astore(receiver);
@@ -741,7 +742,7 @@ public class VMGenerator extends ClassObj
         ib.label(classType);
         ib.aload(descriptor);
         ib.aload(loader);
-        ib.invokeStatic(className(), "loadOwner", "(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/Class;");
+        vmLayout.loadOwnerWithLoader.invokeStatic(ib);
         ib.areturn();
 
         ib.label(notTypeConstant);
@@ -809,8 +810,8 @@ public class VMGenerator extends ClassObj
 
         ib.aload(constants);
         ib.iload(typeIndex);
-        ib.invokeStatic(className(), "constantString", "([Ljava/lang/Object;I)Ljava/lang/String;");
-        ib.invokeStatic(className(), "loadOwner", "(Ljava/lang/String;)Ljava/lang/Class;");
+        vmLayout.constantString.invokeStatic(ib);
+        vmLayout.loadOwner.invokeStatic(ib);
         ib.aload(throwable);
         ib.invokeVirtual("java/lang/Class", "isInstance", "(Ljava/lang/Object;)Z");
         ib.ifne(typeMatches);
@@ -839,8 +840,8 @@ public class VMGenerator extends ClassObj
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
-                "getField",
-                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/Object;)Ljava/lang/Object;");
+                vmLayout.getField.name(),
+                vmLayout.getField.descriptor());
         InsnBuilder ib = new InsnBuilder(method.instructions);
         LabelNode start = new LabelNode();
         LabelNode end = new LabelNode();
@@ -869,7 +870,7 @@ public class VMGenerator extends ClassObj
         ib.label(handler);
         ib.astore(5);
         ib.aload(5);
-        ib.invokeStatic(className(), "rethrow", "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;");
+        vmLayout.rethrow.invokeStatic(ib);
         ib.athrow();
         return method;
     }
@@ -878,8 +879,8 @@ public class VMGenerator extends ClassObj
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
-                "setField",
-                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/Object;Ljava/lang/Object;)V");
+                vmLayout.setField.name(),
+                vmLayout.setField.descriptor());
         InsnBuilder ib = new InsnBuilder(method.instructions);
         LabelNode start = new LabelNode();
         LabelNode end = new LabelNode();
@@ -890,7 +891,7 @@ public class VMGenerator extends ClassObj
         ib.label(start);
         ib.aload(5);
         ib.aload(2);
-        ib.invokeStatic(className(), "loadOwner", "(Ljava/lang/String;)Ljava/lang/Class;");
+        vmLayout.loadOwner.invokeStatic(ib);
         ib.invokeStatic(
                 className(),
                 "coerceArgument",
@@ -918,7 +919,7 @@ public class VMGenerator extends ClassObj
         ib.label(handler);
         ib.astore(6);
         ib.aload(6);
-        ib.invokeStatic(className(), "rethrow", "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;");
+        vmLayout.rethrow.invokeStatic(ib);
         ib.athrow();
         return method;
     }
@@ -940,7 +941,7 @@ public class VMGenerator extends ClassObj
 
         emitFieldHandleKey(ib);
         ib.astore(key);
-        ib.getStatic(className(), "FIELD_HANDLES", "Ljava/util/Map;");
+        vmLayout.fieldHandles.getStatic(ib);
         ib.aload(key);
         ib.invokeInterface("java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
         ib.checkCast("java/lang/invoke/MethodHandle");
@@ -962,16 +963,16 @@ public class VMGenerator extends ClassObj
         ib.label(create);
         ib.label(start);
         ib.aload(0);
-        ib.invokeStatic(className(), "loadOwner", "(Ljava/lang/String;)Ljava/lang/Class;");
+        vmLayout.loadOwner.invokeStatic(ib);
         ib.astore(ownerClass);
 
         ib.aload(2);
-        ib.invokeStatic(className(), "loadOwner", "(Ljava/lang/String;)Ljava/lang/Class;");
+        vmLayout.loadOwner.invokeStatic(ib);
         ib.astore(fieldType);
 
         ib.aload(ownerClass);
         ib.aload(1);
-        ib.invokeStatic(className(), "findField", "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/reflect/Field;");
+        vmLayout.findField.invokeStatic(ib);
         ib.astore(field);
         ib.aload(field);
         ib.iconst1();
@@ -1001,7 +1002,7 @@ public class VMGenerator extends ClassObj
                 "(Ljava/lang/reflect/Field;ZZ)Ljava/lang/invoke/MethodHandle;");
         ib.astore(handle);
 
-        ib.getStatic(className(), "FIELD_HANDLES", "Ljava/util/Map;");
+        vmLayout.fieldHandles.getStatic(ib);
         ib.aload(key);
         ib.aload(handle);
         ib.invokeInterface(
@@ -1137,7 +1138,7 @@ public class VMGenerator extends ClassObj
         ib.iload(index);
         ib.aaload();
         ib.aload(1);
-        ib.invokeStatic(className(), "findField", "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/reflect/Field;");
+        vmLayout.findField.invokeStatic(ib);
         ib.astore(found);
         ib.label(interfaceEnd);
         ib.aload(found);
@@ -1157,7 +1158,7 @@ public class VMGenerator extends ClassObj
         ib.ifNull(noSuperClass);
         ib.aload(superClass);
         ib.aload(1);
-        ib.invokeStatic(className(), "findField", "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/reflect/Field;");
+        vmLayout.findField.invokeStatic(ib);
         ib.areturn();
 
         ib.label(noSuperClass);
@@ -1308,13 +1309,13 @@ public class VMGenerator extends ClassObj
         ib.invokeVirtual("java/lang/Class", "isArray", "()Z");
         ib.ifeq(normalInvoke);
         ib.aload(4);
-        ib.invokeStatic(className(), "cloneArray", "(Ljava/lang/Object;)Ljava/lang/Object;");
+        vmLayout.cloneArray.invokeStatic(ib);
         ib.areturn();
         ib.label(normalInvoke);
 
         emitMethodHandleKey(ib);
         ib.astore(key);
-        ib.getStatic(className(), "METHOD_HANDLES", "Ljava/util/Map;");
+        vmLayout.methodHandles.getStatic(ib);
         ib.aload(key);
         ib.invokeInterface("java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
         ib.checkCast("java/lang/invoke/MethodHandle");
@@ -1353,7 +1354,7 @@ public class VMGenerator extends ClassObj
 
         ib.label(reflectionStart);
         ib.aload(0);
-        ib.invokeStatic(className(), "loadOwner", "(Ljava/lang/String;)Ljava/lang/Class;");
+        vmLayout.loadOwner.invokeStatic(ib);
         ib.astore(ownerClass);
         ib.aload(ownerClass);
         ib.aload(1);
@@ -1396,7 +1397,7 @@ public class VMGenerator extends ClassObj
                 "(Ljava/lang/reflect/Method;ZI)Ljava/lang/invoke/MethodHandle;");
         ib.astore(target);
         ib.label(cacheTarget);
-        ib.getStatic(className(), "METHOD_HANDLES", "Ljava/util/Map;");
+        vmLayout.methodHandles.getStatic(ib);
         ib.aload(key);
         ib.aload(target);
         ib.invokeInterface(
@@ -1471,7 +1472,7 @@ public class VMGenerator extends ClassObj
         ib.label(invokeHandler);
         ib.astore(exception);
         ib.aload(exception);
-        ib.invokeStatic(className(), "rethrow", "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;");
+        vmLayout.rethrow.invokeStatic(ib);
         ib.athrow();
         return method;
     }
@@ -1480,8 +1481,8 @@ public class VMGenerator extends ClassObj
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
-                "construct",
-                "(Ljava/lang/String;Ljava/lang/invoke/MethodType;[Ljava/lang/Object;)Ljava/lang/Object;");
+                vmLayout.construct.name(),
+                vmLayout.construct.descriptor());
         InsnBuilder ib = new InsnBuilder(method.instructions);
         int key = 3;
         int target = 4;
@@ -1500,7 +1501,7 @@ public class VMGenerator extends ClassObj
         ib.invokeVirtual("java/lang/StringBuilder", "toString", "()Ljava/lang/String;");
         ib.astore(key);
 
-        ib.getStatic(className(), "METHOD_HANDLES", "Ljava/util/Map;");
+        vmLayout.methodHandles.getStatic(ib);
         ib.aload(key);
         ib.invokeInterface("java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
         ib.checkCast("java/lang/invoke/MethodHandle");
@@ -1521,7 +1522,7 @@ public class VMGenerator extends ClassObj
 
         ib.label(resolveStart);
         ib.aload(0);
-        ib.invokeStatic(className(), "loadOwner", "(Ljava/lang/String;)Ljava/lang/Class;");
+        vmLayout.loadOwner.invokeStatic(ib);
         ib.astore(ownerClass);
 
         ib.aload(ownerClass);
@@ -1545,7 +1546,7 @@ public class VMGenerator extends ClassObj
                 "(Ljava/lang/reflect/Constructor;I)Ljava/lang/invoke/MethodHandle;");
         ib.astore(target);
 
-        ib.getStatic(className(), "METHOD_HANDLES", "Ljava/util/Map;");
+        vmLayout.methodHandles.getStatic(ib);
         ib.aload(key);
         ib.aload(target);
         ib.invokeInterface(
@@ -1557,7 +1558,7 @@ public class VMGenerator extends ClassObj
         ib.label(resolveHandler);
         ib.astore(exception);
         ib.aload(exception);
-        ib.invokeStatic(className(), "rethrow", "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;");
+        vmLayout.rethrow.invokeStatic(ib);
         ib.athrow();
 
         ib.label(targetReady);
@@ -1586,7 +1587,7 @@ public class VMGenerator extends ClassObj
         ib.label(invokeHandler);
         ib.astore(exception);
         ib.aload(exception);
-        ib.invokeStatic(className(), "rethrow", "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;");
+        vmLayout.rethrow.invokeStatic(ib);
         ib.athrow();
         return method;
     }
@@ -1916,7 +1917,7 @@ public class VMGenerator extends ClassObj
         ib.aload(0);
         ib.ldc(org.objectweb.asm.Type.getObjectType(className()));
         ib.invokeVirtual("java/lang/Class", "getClassLoader", "()Ljava/lang/ClassLoader;");
-        ib.invokeStatic(className(), "loadOwner", "(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/Class;");
+        vmLayout.loadOwnerWithLoader.invokeStatic(ib);
         ib.areturn();
         return method;
     }
@@ -2096,7 +2097,7 @@ public class VMGenerator extends ClassObj
         ib.athrow();
 
         ib.label(notNull);
-        ib.getStatic(className(), "MONITORS", "Ljava/util/Map;");
+        vmLayout.monitors.getStatic(ib);
         ib.aload(0);
         ib.invokeInterface("java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
         ib.checkCast("java/util/concurrent/locks/ReentrantLock");
@@ -2109,7 +2110,7 @@ public class VMGenerator extends ClassObj
         ib.invokeSpecial("java/util/concurrent/locks/ReentrantLock", "<init>", "()V");
         ib.astore(1);
 
-        ib.getStatic(className(), "MONITORS", "Ljava/util/Map;");
+        vmLayout.monitors.getStatic(ib);
         ib.aload(0);
         ib.aload(1);
         ib.invokeInterface(
@@ -2128,11 +2129,11 @@ public class VMGenerator extends ClassObj
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
-                "monitorEnter",
-                "(Ljava/lang/Object;)V");
+                vmLayout.monitorEnter.name(),
+                vmLayout.monitorEnter.descriptor());
         InsnBuilder ib = new InsnBuilder(method.instructions);
         ib.aload(0);
-        ib.invokeStatic(className(), "monitorFor", "(Ljava/lang/Object;)Ljava/util/concurrent/locks/ReentrantLock;");
+        vmLayout.monitorFor.invokeStatic(ib);
         ib.invokeVirtual("java/util/concurrent/locks/ReentrantLock", "lock", "()V");
         ib._return();
         return method;
@@ -2142,11 +2143,11 @@ public class VMGenerator extends ClassObj
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
-                "monitorExit",
-                "(Ljava/lang/Object;)V");
+                vmLayout.monitorExit.name(),
+                vmLayout.monitorExit.descriptor());
         InsnBuilder ib = new InsnBuilder(method.instructions);
         ib.aload(0);
-        ib.invokeStatic(className(), "monitorFor", "(Ljava/lang/Object;)Ljava/util/concurrent/locks/ReentrantLock;");
+        vmLayout.monitorFor.invokeStatic(ib);
         ib.invokeVirtual("java/util/concurrent/locks/ReentrantLock", "unlock", "()V");
         ib._return();
         return method;
@@ -2366,22 +2367,22 @@ public class VMGenerator extends ClassObj
             ib.aastore();
         }
         ib.invokeStatic("java/util/Arrays", "asList", "([Ljava/lang/Object;)Ljava/util/List;");
-        ib.putStatic(className(), "CODE_POOLS", "Ljava/util/List;");
+        vmLayout.codePools.putStatic(ib);
 
         ib.new_("java/util/concurrent/ConcurrentHashMap");
         ib.dup();
         ib.invokeSpecial("java/util/concurrent/ConcurrentHashMap", "<init>", "()V");
-        ib.putStatic(className(), "FIELD_HANDLES", "Ljava/util/Map;");
+        vmLayout.fieldHandles.putStatic(ib);
 
         ib.new_("java/util/concurrent/ConcurrentHashMap");
         ib.dup();
         ib.invokeSpecial("java/util/concurrent/ConcurrentHashMap", "<init>", "()V");
-        ib.putStatic(className(), "METHOD_HANDLES", "Ljava/util/Map;");
+        vmLayout.methodHandles.putStatic(ib);
 
         ib.new_("java/util/concurrent/ConcurrentHashMap");
         ib.dup();
         ib.invokeSpecial("java/util/concurrent/ConcurrentHashMap", "<init>", "()V");
-        ib.putStatic(className(), "METHOD_TYPES", "Ljava/util/Map;");
+        vmLayout.methodTypes.putStatic(ib);
 
         ib.new_("java/util/WeakHashMap");
         ib.dup();
@@ -2390,7 +2391,7 @@ public class VMGenerator extends ClassObj
                 "java/util/Collections",
                 "synchronizedMap",
                 "(Ljava/util/Map;)Ljava/util/Map;");
-        ib.putStatic(className(), "MONITORS", "Ljava/util/Map;");
+        vmLayout.monitors.putStatic(ib);
 
         ib._return();
 

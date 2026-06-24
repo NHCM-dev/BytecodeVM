@@ -23,8 +23,8 @@ public class InstanceofBranch extends InterpretBranch
         InsnBuilder ib = new InsnBuilder();
         ib.aload(InterpretContext.CONSTANTS);
         context.nextToken(ib);
-        ib.invokeStatic(context.vmClassName, "constantString", "([Ljava/lang/Object;I)Ljava/lang/String;");
-        ib.invokeStatic(context.vmClassName, "loadOwner", "(Ljava/lang/String;)Ljava/lang/Class;");
+        context.vm.constantString.invokeStatic(ib);
+        context.vm.loadOwner.invokeStatic(ib);
         popObject(ib, context);
         ib.invokeVirtual("java/lang/Class", "isInstance", "(Ljava/lang/Object;)Z");
         pushInt(ib, context);

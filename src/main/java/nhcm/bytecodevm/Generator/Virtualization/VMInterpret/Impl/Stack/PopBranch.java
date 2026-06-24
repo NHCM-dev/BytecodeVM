@@ -23,7 +23,7 @@ public class PopBranch extends InterpretBranch
     {
         InsnBuilder ib = new InsnBuilder();
         context.loadFrame(ib);
-        ib.invokeVirtual(context.frameClassName, "peekWidth", "()I");
+        context.frame.peekWidth.invokeVirtual(ib);
         ib.istore(InterpretContext.DUP_WIDTH_1);
         popObject(ib, context, InterpretContext.DUP_VALUE_1);
 
