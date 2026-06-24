@@ -188,6 +188,11 @@ public class VMSetGenerator
         methodsToObfuscate.put(methodNode, classNode);
     }
 
+    public int methodCount()
+    {
+        return methodsToObfuscate.size();
+    }
+
     private int generateUniqueCodeId()
     {
         int codeId;

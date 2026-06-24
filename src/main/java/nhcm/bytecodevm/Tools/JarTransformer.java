@@ -3,6 +3,9 @@ package nhcm.bytecodevm.Tools;
 import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.tree.ClassNode;
+import nhcm.bytecodevm.Utils.LogColors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.*;
 import java.util.*;
@@ -10,6 +13,8 @@ import java.util.jar.*;
 
 public class JarTransformer
 {
+    private static final Logger logger = LoggerFactory.getLogger(JarTransformer.class);
+
     public interface Transformer
     {
         void transform(JarContext context);
@@ -56,15 +61,22 @@ public class JarTransformer
 
     public static void transformJar(File input, File output, Transformer transformer) throws IOException
     {
+        long start = System.nanoTime();
         JarContext context = readJar(input);
 
         transformer.transform(context);
 
         writeJar(output, context);
+        logger.debug(
+                "Transformed {} -> {} in {} ms",
+                input.getAbsolutePath(),
+                output.getAbsolutePath(),
+                (System.nanoTime() - start) / 1_000_000L);
     }
 
     public static JarContext readJar(File input) throws IOException
     {
+        logger.info("{}", LogColors.jarRead("Reading jar: " + LogColors.path(input.getAbsolutePath())));
         JarContext context = new JarContext();
 
         try (JarFile jarFile = new JarFile(input))
@@ -105,11 +117,22 @@ public class JarTransformer
             }
         }
 
+        logger.info("{}", LogColors.success(
+                "Read jar " +
+                        LogColors.path(input.getAbsolutePath()) +
+                        ": " +
+                        LogColors.strong(context.classes.size()) +
+                        " class(es), " +
+                        LogColors.strong(context.resources.size()) +
+                        " resource(s)"));
         return context;
     }
 
     public static void writeJar(File output, JarContext context) throws IOException
     {
+        logger.info("{}", LogColors.jarWrite("Writing jar: " + LogColors.path(output.getAbsolutePath())));
+        int classCount = 0;
+        int resourceCount = 0;
         try (JarOutputStream jos = new JarOutputStream(new FileOutputStream(output)))
         {
             Set<String> written = new HashSet<>();
@@ -134,6 +157,7 @@ public class JarTransformer
 
                 jos.write(cw.toByteArray());
                 jos.closeEntry();
+                classCount++;
             }
 
             for (Map.Entry<String, byte[]> resource : context.resources.entrySet())
@@ -148,8 +172,17 @@ public class JarTransformer
                 jos.putNextEntry(new JarEntry(name));
                 jos.write(resource.getValue());
                 jos.closeEntry();
+                resourceCount++;
             }
         }
+        logger.info("{}", LogColors.success(
+                "Wrote jar " +
+                        LogColors.path(output.getAbsolutePath()) +
+                        ": " +
+                        LogColors.strong(classCount) +
+                        " class(es), " +
+                        LogColors.strong(resourceCount) +
+                        " resource(s)"));
     }
 
     private static byte[] readAllBytes(InputStream is) throws IOException

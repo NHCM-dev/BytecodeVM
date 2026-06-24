@@ -9,20 +9,24 @@ import nhcm.bytecodevm.Generator.GlobalTool.VMProgramGenerator;
 import nhcm.bytecodevm.Tools.JarTransformer;
 import nhcm.bytecodevm.Tools.OpcMutator;
 import nhcm.bytecodevm.Utils.ClassUtils;
+import nhcm.bytecodevm.Utils.LogColors;
 import nhcm.bytecodevm.Utils.MethodUtils;
 import nhcm.bytecodevm.Utils.RandomUtils;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodNode;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.nio.file.Path;
+import java.nio.file.Files;
 import java.util.*;
 
 public class Obfuscator
 {
-    private final Path input;
-    private final Path output;
+    private static final Logger logger = LoggerFactory.getLogger(Obfuscator.class);
+
     private final BytecodeVMConfig config;
+    private final TargetMatcher targetInclude;
     private final TargetMatcher targetExclude;
 
     private final List<VMSetGenerator> VMSetGenerators = new ArrayList<>();
@@ -34,15 +38,18 @@ public class Obfuscator
     private final VMCodePoolGenerator vmCodePoolGenerator;
     private final ClassNode vmCodePoolClassNode;
 
-    public Obfuscator(Path input, Path output, BytecodeVMConfig config)
+    public Obfuscator(BytecodeVMConfig config)
     {
-        this.input = input;
-        this.output = output;
         this.config = config;
-        targetExclude = new TargetMatcher();
+        this.targetExclude = new TargetMatcher();
         for(String exclusion : config.exclusions)
         {
             targetExclude.add(exclusion);
+        }
+        this.targetInclude = new TargetMatcher();
+        for(String include : config.includes)
+        {
+            targetInclude.add(include);
         }
         this.methodFrameGenerator = new MethodFrameGenerator("BytecodeVM/MethodFrame");
         this.methodFrameClassNode = methodFrameGenerator.getClassNode();
@@ -56,28 +63,40 @@ public class Obfuscator
 
     public void obfuscate()
     {
+        if(!Files.exists(config.inputFile))
+        {
+            logger.error("{}", LogColors.error("Input file does not exist: " + LogColors.path(config.inputFile.toAbsolutePath())));
+            return;
+        }
+        logger.info("{}", LogColors.lifecycle(
+                "Obfuscating " +
+                        LogColors.path(config.inputFile.toAbsolutePath()) +
+                        " -> " +
+                        LogColors.path(config.outputFile.toAbsolutePath())));
         try
         {
-            JarTransformer.transformJar(input.toFile(), output.toFile(), this::obfuscateProcess);
+            JarTransformer.transformJar(config.inputFile.toFile(), config.outputFile.toFile(), this::obfuscateProcess);
         } catch (IOException e)
         {
-            System.out.println("Failed obfuscating while reading input file: " + e.getMessage());
-            e.printStackTrace();
+            logger.error(LogColors.error("Failed obfuscating while reading or writing jar"), e);
         }
     }
 
     private void obfuscateProcess(JarTransformer.JarContext context)
     {
         processJar(context);
-        System.out.println("Adding classes...");
+        logger.info("{}", LogColors.lifecycle("Adding required VM support classes"));
         context.addClass(methodFrameClassNode);
         context.addClass(vmProgramClassNode);
         context.addClass(vmCodePoolClassNode);
-        System.out.println("Done adding required classes");
+        logger.debug("{}", LogColors.success("Added required VM support classes"));
         List<VMSetGenerator> generators = new ArrayList<>(this.VMSetGenerators);
         for(VMSetGenerator generator : generators)
         {
-            System.out.println("Virtualizing VM: " + generator.vmClassName);
+            logger.info("{}", LogColors.virtualize(
+                    "Virtualizing VM: " +
+                            LogColors.strong(generator.vmClassName) +
+                            " (" + generator.methodCount() + " method(s))"));
             VirtualizationResult result = generator.compile();
             context.classes.putAll(result.transformedTarget);
             context.addClass(result.vmClass);
@@ -85,9 +104,9 @@ public class Obfuscator
             {
                 context.addClass(codePoolClass);
             }
-            System.out.println("Done virtualizing VM: " + generator.vmClassName);
+            logger.info("{}", LogColors.success("Done virtualizing VM: " + LogColors.strong(generator.vmClassName)));
         }
-        System.out.println("Done virtualizing all classes");
+        logger.info("{}", LogColors.success("Done virtualizing all classes"));
     }
 
     private static boolean shouldIgnoreMethod(MethodNode methodNode)
@@ -97,73 +116,77 @@ public class Obfuscator
 
     private void processJar(JarTransformer.JarContext context)
     {
-        System.out.println("Scanning input file for methods to obfuscate");
+        logger.info("{}", LogColors.scan("Scanning input file for methods to obfuscate"));
         String globalLocation = "BytecodeVM";
-        VMSetGenerator allInOneVm = newVMSetGenerator(
-                "BytecodeVM",
-                "BytecodeVM");
+        VMSetGenerator allInOneVm = newVMSetGenerator("BytecodeVM", "BytecodeVM");
         List<VMSetGenerator> perClasses = new ArrayList<>();
         List<VMSetGenerator> perMethods = new ArrayList<>();
         Map<String, VMSetGenerator> perPackage = new LinkedHashMap<>();
+        int matchedMethods = 0;
         for (ClassNode classNode : context.classes.values())
         {
-            if(!targetExclude.isClassMatched(classNode))
+            if(!targetInclude.isClassMatched(classNode))
             {
-                String classPackage = ClassUtils.getPackageName(classNode);
-                String VMlocation = globalLocation;
-                switch (config.location)
+                continue;
+            }
+            if(targetExclude.isClassMatched(classNode))
+            {
+                continue;
+            }
+            String classPackage = ClassUtils.getPackageName(classNode);
+            String VMlocation = globalLocation;
+            switch (config.location)
+            {
+                case ONE_PACKAGE -> VMlocation = globalLocation;
+                case NEW_PACKAGE -> VMlocation = classPackage + "/" + classNode.name + "VM";
+                case SAME_PACKAGE_AS_TARGET -> VMlocation = classPackage;
+            }
+            VMSetGenerator perClass = newVMSetGenerator(
+                    ClassUtils.getSimpleName(classNode) + "$VM",
+                    VMlocation);
+            if(config.createMode == BytecodeVMConfig.VMCreateMode.PER_CLASS)
+            {
+                perClasses.add(perClass);
+            }
+            for(MethodNode methodNode : classNode.methods)
+            {
+                if(shouldIgnoreMethod(methodNode))
                 {
-                    case ONE_PACKAGE -> VMlocation = globalLocation;
-                    case NEW_PACKAGE -> VMlocation = classPackage + "/" + classNode.name + "VM";
-                    case SAME_PACKAGE_AS_TARGET -> VMlocation = classPackage;
+                    continue;
                 }
-                VMSetGenerator perClass = newVMSetGenerator(
-                        ClassUtils.getSimpleName(classNode) + "$VM",
-                        VMlocation);
-                if(config.createMode == BytecodeVMConfig.VMCreateMode.PER_CLASS)
+                if(!targetInclude.isMethodMatched(classNode, methodNode))
                 {
-                    perClasses.add(perClass);
+                    continue;
                 }
-                for(MethodNode methodNode : classNode.methods)
+                if(targetExclude.isMethodMatched(classNode, methodNode))
                 {
-                    if(shouldIgnoreMethod(methodNode))
+                    continue;
+                }
+                matchedMethods++;
+                switch (config.createMode)
+                {
+                    case PER_CLASS:
                     {
-                        continue;
+                        perClass.addMethod(methodNode, classNode);
+                        break;
                     }
-                    if(!targetExclude.isMethodMatched(classNode, methodNode))
+                    case PER_METHOD:
                     {
-                        switch (config.createMode)
-                        {
-                            case PER_CLASS:
-                            {
-                                perClass.addMethod(methodNode, classNode);
-                                break;
-                            }
-                            case PER_METHOD:
-                            {
-                                VMSetGenerator perMethod = newVMSetGenerator(
-                                        ClassUtils.getSimpleName(classNode) + "$" + methodNode.name + "$VM",
-                                        VMlocation);
-                                perMethods.add(perMethod);
-                                perMethod.addMethod(methodNode, classNode);
-                                break;
-                            }
-                            case PER_PACKAGE:
-                            {
-                                VMSetGenerator generator = perPackage.computeIfAbsent(
-                                        classPackage,
-                                        ignored -> newVMSetGenerator(
-                                                classPackage + "$VM",
-                                                classPackage));
-                                generator.addMethod(methodNode, classNode);
-                                break;
-                            }
-                            case ONE_FOR_ALL:
-                            {
-                                allInOneVm.addMethod(methodNode, classNode);
-                                break;
-                            }
-                        }
+                        VMSetGenerator perMethod = newVMSetGenerator(ClassUtils.getSimpleName(classNode) + "$" + methodNode.name + "$VM", VMlocation);
+                        perMethods.add(perMethod);
+                        perMethod.addMethod(methodNode, classNode);
+                        break;
+                    }
+                    case PER_PACKAGE:
+                    {
+                        VMSetGenerator generator = perPackage.computeIfAbsent(classPackage, ignored -> newVMSetGenerator(classPackage + "$VM", classPackage));
+                        generator.addMethod(methodNode, classNode);
+                        break;
+                    }
+                    case ONE_FOR_ALL:
+                    {
+                        allInOneVm.addMethod(methodNode, classNode);
+                        break;
                     }
                 }
             }
@@ -191,7 +214,12 @@ public class Obfuscator
                 break;
             }
         }
-        System.out.println("Scanned input file, found " + VMSetGenerators.size() + " methods to obfuscate");
+        logger.info("{}", LogColors.scan(
+                "Scanned input file, found " +
+                        LogColors.strong(matchedMethods) +
+                        " method(s) across " +
+                        LogColors.strong(VMSetGenerators.size()) +
+                        " VM set(s)"));
     }
 
     private OpcMutator chooseMutator()
