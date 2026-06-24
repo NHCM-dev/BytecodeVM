@@ -167,26 +167,33 @@ public class VMGenerator extends ClassObj
         this.classNode = cn;
         String vmCodePoolSign = vmCodePoolGenerator.descriptor();
         cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "CODE_POOLS", "Ljava/util/List;", "Ljava/util/List<" + vmCodePoolSign + ">;"));
-        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "FIELD_HANDLES", "Ljava/util/Map;", "Ljava/util/Map<Ljava/lang/String;Ljava/lang/reflect/Field;>;"));
-        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "METHOD_HANDLES", "Ljava/util/Map;", "Ljava/util/Map<Ljava/lang/String;Ljava/lang/reflect/Method;>;"));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "FIELD_HANDLES", "Ljava/util/Map;", "Ljava/util/Map<Ljava/lang/String;Ljava/lang/invoke/MethodHandle;>;"));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "METHOD_HANDLES", "Ljava/util/Map;", "Ljava/util/Map<Ljava/lang/String;Ljava/lang/invoke/MethodHandle;>;"));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "METHOD_TYPES", "Ljava/util/Map;", "Ljava/util/Map<Ljava/lang/String;Ljava/lang/invoke/MethodType;>;"));
         cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "MONITORS", "Ljava/util/Map;", "Ljava/util/Map<Ljava/lang/Object;Ljava/util/concurrent/locks/ReentrantLock;>;"));
         cn.methods.add(genClInitMethod(codePoolGenerators));
         cn.methods.add(genExecuteMethod());
         cn.methods.add(genInterpretMethod());
         cn.methods.add(genResolveMethod());
-        cn.methods.add(genNextTokenMethod());
         cn.methods.add(genConstantStringMethod());
+        cn.methods.add(genMethodTypeMethod());
         cn.methods.add(genResolveConstantMethod());
         cn.methods.add(genFindExceptionHandlerMethod());
         cn.methods.add(genGetFieldMethod());
         cn.methods.add(genSetFieldMethod());
         cn.methods.add(genFieldHandleMethod());
+        cn.methods.add(genAdaptFieldHandleMethod());
         cn.methods.add(genFindFieldMethod());
+        cn.methods.add(genFindMethodMethod());
         cn.methods.add(genInvokeMethod());
         cn.methods.add(genConstructMethod());
+        cn.methods.add(genAdaptMethodHandleMethod());
+        cn.methods.add(genAdaptDirectMethodHandleMethod());
+        cn.methods.add(genAdaptConstructorHandleMethod());
         cn.methods.add(genCoerceArgumentMethod());
         cn.methods.add(genCloneArrayMethod());
         cn.methods.add(genLoadOwnerMethod());
+        cn.methods.add(genLoadOwnerWithLoaderMethod());
         cn.methods.add(genMonitorForMethod());
         cn.methods.add(genMonitorEnterMethod());
         cn.methods.add(genMonitorExitMethod());
@@ -234,11 +241,17 @@ public class VMGenerator extends ClassObj
         ib.getField(methodFrameGenerator.className(), "programCounter", "I");
         ib.istore(InterpretContext.INSTRUCTION_PC);
 
-        // int opcode = nextToken(code, frame);
+        // int opcode = code[frame.programCounter++];
         ib.label(tryStart);
         ib.aload(InterpretContext.CODE);
         ib.aload(InterpretContext.FRAME);
-        ib.invokeStatic(className(), "nextToken", "([I" + methodFrameGenerator.descriptor() + ")I");
+        ib.dup();
+        ib.getField(methodFrameGenerator.className(), "programCounter", "I");
+        ib.dupX1();
+        ib.iconst1();
+        ib.iadd();
+        ib.putField(methodFrameGenerator.className(), "programCounter", "I");
+        ib.iaload();
         ib.istore(InterpretContext.OPCODE);
 
         generateDispatch(
@@ -588,26 +601,6 @@ public class VMGenerator extends ClassObj
         return method;
     }
 
-    private MethodNode genNextTokenMethod()
-    {
-        MethodNode method = MethodUtils.newMethodNode(
-                new Acc[]{Acc.PRIVATE, Acc.STATIC},
-                "nextToken",
-                "([I" + methodFrameGenerator.descriptor() + ")I");
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        ib.aload(0);
-        ib.aload(1);
-        ib.dup();
-        ib.getField(methodFrameGenerator.className(), "programCounter", "I");
-        ib.dupX1();
-        ib.iconst1();
-        ib.iadd();
-        ib.putField(methodFrameGenerator.className(), "programCounter", "I");
-        ib.iaload();
-        ib.ireturn();
-        return method;
-    }
-
     private MethodNode genConstantStringMethod()
     {
         MethodNode method = MethodUtils.newMethodNode(
@@ -623,18 +616,61 @@ public class VMGenerator extends ClassObj
         return method;
     }
 
+    private MethodNode genMethodTypeMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(
+                new Acc[]{Acc.PRIVATE, Acc.STATIC},
+                "methodType",
+                "(Ljava/lang/String;)Ljava/lang/invoke/MethodType;");
+        InsnBuilder ib = new InsnBuilder(method.instructions);
+        int cached = 1;
+
+        ib.getStatic(className(), "METHOD_TYPES", "Ljava/util/Map;");
+        ib.aload(0);
+        ib.invokeInterface("java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
+        ib.checkCast("java/lang/invoke/MethodType");
+        ib.astore(cached);
+
+        LabelNode create = new LabelNode();
+        ib.aload(cached);
+        ib.ifNull(create);
+        ib.aload(cached);
+        ib.areturn();
+
+        ib.label(create);
+        ib.aload(0);
+        ib.ldc(org.objectweb.asm.Type.getObjectType(className()));
+        ib.invokeVirtual("java/lang/Class", "getClassLoader", "()Ljava/lang/ClassLoader;");
+        ib.invokeStatic(
+                "java/lang/invoke/MethodType",
+                "fromMethodDescriptorString",
+                "(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType;");
+        ib.astore(cached);
+        ib.getStatic(className(), "METHOD_TYPES", "Ljava/util/Map;");
+        ib.aload(0);
+        ib.aload(cached);
+        ib.invokeInterface("java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+        ib.pop();
+        ib.aload(cached);
+        ib.areturn();
+        return method;
+    }
+
     private MethodNode genResolveConstantMethod()
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
                 "resolveConstant",
-                "(Ljava/lang/Object;)Ljava/lang/Object;");
+                "(Ljava/lang/Object;" + methodFrameGenerator.descriptor() + ")Ljava/lang/Object;");
         InsnBuilder ib = new InsnBuilder(method.instructions);
-        int encoded = 1;
-        int descriptor = 2;
+        int encoded = 2;
+        int descriptor = 3;
+        int loader = 4;
+        int receiver = 5;
         LabelNode notEncoded = new LabelNode();
         LabelNode notTypeConstant = new LabelNode();
         LabelNode classType = new LabelNode();
+        LabelNode loaderReady = new LabelNode();
 
         ib.aload(0);
         ib.instanceOf("[Ljava/lang/Object;");
@@ -665,6 +701,26 @@ public class VMGenerator extends ClassObj
         ib.checkCast("java/lang/String");
         ib.astore(descriptor);
 
+        ib.ldc(org.objectweb.asm.Type.getObjectType(className()));
+        ib.invokeVirtual("java/lang/Class", "getClassLoader", "()Ljava/lang/ClassLoader;");
+        ib.astore(loader);
+        ib.aload(1);
+        ib.getField(methodFrameGenerator.className(), "locals", "[Ljava/lang/Object;");
+        ib.arrayLength();
+        ib.ifle(loaderReady);
+        ib.aload(1);
+        ib.getField(methodFrameGenerator.className(), "locals", "[Ljava/lang/Object;");
+        ib.iconst0();
+        ib.aaload();
+        ib.astore(receiver);
+        ib.aload(receiver);
+        ib.ifNull(loaderReady);
+        ib.aload(receiver);
+        ib.invokeVirtual("java/lang/Object", "getClass", "()Ljava/lang/Class;");
+        ib.invokeVirtual("java/lang/Class", "getClassLoader", "()Ljava/lang/ClassLoader;");
+        ib.astore(loader);
+        ib.label(loaderReady);
+
         ib.aload(descriptor);
         ib.invokeVirtual("java/lang/String", "length", "()I");
         ib.ifeq(notTypeConstant);
@@ -675,8 +731,7 @@ public class VMGenerator extends ClassObj
         ib.ifIcmpNe(classType);
 
         ib.aload(descriptor);
-        ib.ldc(org.objectweb.asm.Type.getObjectType(className()));
-        ib.invokeVirtual("java/lang/Class", "getClassLoader", "()Ljava/lang/ClassLoader;");
+        ib.aload(loader);
         ib.invokeStatic(
                 "java/lang/invoke/MethodType",
                 "fromMethodDescriptorString",
@@ -685,7 +740,8 @@ public class VMGenerator extends ClassObj
 
         ib.label(classType);
         ib.aload(descriptor);
-        ib.invokeStatic(className(), "loadOwner", "(Ljava/lang/String;)Ljava/lang/Class;");
+        ib.aload(loader);
+        ib.invokeStatic(className(), "loadOwner", "(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/Class;");
         ib.areturn();
 
         ib.label(notTypeConstant);
@@ -801,11 +857,11 @@ public class VMGenerator extends ClassObj
         ib.invokeStatic(
                 className(),
                 "fieldHandle",
-                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZZ)Ljava/lang/reflect/Field;");
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZZ)Ljava/lang/invoke/MethodHandle;");
         ib.aload(4);
         ib.invokeVirtual(
-                "java/lang/reflect/Field",
-                "get",
+                "java/lang/invoke/MethodHandle",
+                "invokeExact",
                 "(Ljava/lang/Object;)Ljava/lang/Object;");
         ib.label(end);
         ib.areturn();
@@ -849,12 +905,12 @@ public class VMGenerator extends ClassObj
         ib.invokeStatic(
                 className(),
                 "fieldHandle",
-                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZZ)Ljava/lang/reflect/Field;");
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZZ)Ljava/lang/invoke/MethodHandle;");
         ib.aload(4);
         ib.aload(5);
         ib.invokeVirtual(
-                "java/lang/reflect/Field",
-                "set",
+                "java/lang/invoke/MethodHandle",
+                "invokeExact",
                 "(Ljava/lang/Object;Ljava/lang/Object;)V");
         ib.label(end);
         ib._return();
@@ -872,21 +928,22 @@ public class VMGenerator extends ClassObj
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
                 "fieldHandle",
-                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZZ)Ljava/lang/reflect/Field;");
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZZ)Ljava/lang/invoke/MethodHandle;");
         InsnBuilder ib = new InsnBuilder(method.instructions);
         int key = 5;
         int cached = 6;
         int ownerClass = 7;
         int fieldType = 8;
         int field = 9;
-        int exception = 10;
+        int handle = 10;
+        int exception = 11;
 
         emitFieldHandleKey(ib);
         ib.astore(key);
         ib.getStatic(className(), "FIELD_HANDLES", "Ljava/util/Map;");
         ib.aload(key);
         ib.invokeInterface("java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
-        ib.checkCast("java/lang/reflect/Field");
+        ib.checkCast("java/lang/invoke/MethodHandle");
         ib.astore(cached);
         LabelNode create = new LabelNode();
         ib.aload(cached);
@@ -908,21 +965,8 @@ public class VMGenerator extends ClassObj
         ib.invokeStatic(className(), "loadOwner", "(Ljava/lang/String;)Ljava/lang/Class;");
         ib.astore(ownerClass);
 
-        ib.new_("java/lang/StringBuilder");
-        ib.dup();
-        ib.ldc("()");
-        ib.invokeSpecial("java/lang/StringBuilder", "<init>", "(Ljava/lang/String;)V");
         ib.aload(2);
-        ib.invokeVirtual(
-                "java/lang/StringBuilder", "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
-        ib.invokeVirtual("java/lang/StringBuilder", "toString", "()Ljava/lang/String;");
-        ib.aload(ownerClass);
-        ib.invokeVirtual("java/lang/Class", "getClassLoader", "()Ljava/lang/ClassLoader;");
-        ib.invokeStatic(
-                "java/lang/invoke/MethodType",
-                "fromMethodDescriptorString",
-                "(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType;");
-        ib.invokeVirtual("java/lang/invoke/MethodType", "returnType", "()Ljava/lang/Class;");
+        ib.invokeStatic(className(), "loadOwner", "(Ljava/lang/String;)Ljava/lang/Class;");
         ib.astore(fieldType);
 
         ib.aload(ownerClass);
@@ -948,14 +992,23 @@ public class VMGenerator extends ClassObj
         emitNoSuchField(ib, ownerClass);
 
         ib.label(modifiersMatch);
+        ib.aload(field);
+        ib.iload(3);
+        ib.iload(4);
+        ib.invokeStatic(
+                className(),
+                "adaptFieldHandle",
+                "(Ljava/lang/reflect/Field;ZZ)Ljava/lang/invoke/MethodHandle;");
+        ib.astore(handle);
+
         ib.getStatic(className(), "FIELD_HANDLES", "Ljava/util/Map;");
         ib.aload(key);
-        ib.aload(field);
+        ib.aload(handle);
         ib.invokeInterface(
                 "java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
         ib.pop();
         ib.label(end);
-        ib.aload(field);
+        ib.aload(handle);
         ib.areturn();
 
         ib.label(handler);
@@ -965,6 +1018,63 @@ public class VMGenerator extends ClassObj
         ib.aload(exception);
         ib.invokeSpecial("java/lang/IllegalStateException", "<init>", "(Ljava/lang/Throwable;)V");
         ib.athrow();
+        return method;
+    }
+
+    private MethodNode genAdaptFieldHandleMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(
+                new Acc[]{Acc.PRIVATE, Acc.STATIC},
+                "adaptFieldHandle",
+                "(Ljava/lang/reflect/Field;ZZ)Ljava/lang/invoke/MethodHandle;",
+                new String[]{"java/lang/IllegalAccessException"});
+        InsnBuilder ib = new InsnBuilder(method.instructions);
+        int handle = 3;
+        LabelNode setter = new LabelNode();
+        LabelNode getterInstance = new LabelNode();
+        LabelNode setterInstance = new LabelNode();
+
+        ib.iload(2);
+        ib.ifne(setter);
+
+        ib.invokeStatic("java/lang/invoke/MethodHandles", "lookup", "()Ljava/lang/invoke/MethodHandles$Lookup;");
+        ib.aload(0);
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "unreflectGetter",
+                "(Ljava/lang/reflect/Field;)Ljava/lang/invoke/MethodHandle;");
+        ib.astore(handle);
+        ib.iload(1);
+        ib.ifeq(getterInstance);
+        emitDropLeadingObjectArgument(ib, handle);
+        ib.label(getterInstance);
+        ib.aload(handle);
+        emitGetterHandleType(ib);
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandle",
+                "asType",
+                "(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
+        ib.areturn();
+
+        ib.label(setter);
+        ib.invokeStatic("java/lang/invoke/MethodHandles", "lookup", "()Ljava/lang/invoke/MethodHandles$Lookup;");
+        ib.aload(0);
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "unreflectSetter",
+                "(Ljava/lang/reflect/Field;)Ljava/lang/invoke/MethodHandle;");
+        ib.astore(handle);
+        ib.iload(1);
+        ib.ifeq(setterInstance);
+        emitDropLeadingObjectArgument(ib, handle);
+        ib.label(setterInstance);
+        ib.aload(handle);
+        emitSetterHandleType(ib);
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandle",
+                "asType",
+                "(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
+        ib.areturn();
         return method;
     }
 
@@ -1059,6 +1169,117 @@ public class VMGenerator extends ClassObj
         return method;
     }
 
+    private MethodNode genFindMethodMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(
+                new Acc[]{Acc.PRIVATE, Acc.STATIC},
+                "findMethod",
+                "(Ljava/lang/Class;Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;",
+                new String[]{"java/lang/NoSuchMethodException"});
+        InsnBuilder ib = new InsnBuilder(method.instructions);
+        int interfaces = 3;
+        int index = 4;
+        int found = 5;
+        int superClass = 6;
+        LabelNode declaredStart = new LabelNode();
+        LabelNode declaredEnd = new LabelNode();
+        LabelNode declaredMissing = new LabelNode();
+        LabelNode interfaceLoop = new LabelNode();
+        LabelNode nextInterface = new LabelNode();
+        LabelNode interfacesDone = new LabelNode();
+        LabelNode interfaceStart = new LabelNode();
+        LabelNode interfaceEnd = new LabelNode();
+        LabelNode interfaceMissing = new LabelNode();
+        LabelNode noSuperClass = new LabelNode();
+        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
+                declaredStart,
+                declaredEnd,
+                declaredMissing,
+                "java/lang/NoSuchMethodException"));
+        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
+                interfaceStart,
+                interfaceEnd,
+                interfaceMissing,
+                "java/lang/NoSuchMethodException"));
+
+        ib.label(declaredStart);
+        ib.aload(0);
+        ib.aload(1);
+        ib.aload(2);
+        ib.invokeVirtual(
+                "java/lang/Class",
+                "getDeclaredMethod",
+                "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
+        ib.label(declaredEnd);
+        ib.areturn();
+
+        ib.label(declaredMissing);
+        ib.pop();
+
+        ib.aload(0);
+        ib.invokeVirtual("java/lang/Class", "getInterfaces", "()[Ljava/lang/Class;");
+        ib.astore(interfaces);
+        ib.iconst0();
+        ib.istore(index);
+        ib.label(interfaceLoop);
+        ib.iload(index);
+        ib.aload(interfaces);
+        ib.arrayLength();
+        ib.ifIcmpGe(interfacesDone);
+
+        ib.label(interfaceStart);
+        ib.aload(interfaces);
+        ib.iload(index);
+        ib.aaload();
+        ib.aload(1);
+        ib.aload(2);
+        ib.invokeStatic(
+                className(),
+                "findMethod",
+                "(Ljava/lang/Class;Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
+        ib.astore(found);
+        ib.label(interfaceEnd);
+        ib.aload(found);
+        ib.areturn();
+
+        ib.label(interfaceMissing);
+        ib.pop();
+        ib.label(nextInterface);
+        ib.iinc(index, 1);
+        ib.goto_(interfaceLoop);
+
+        ib.label(interfacesDone);
+        ib.aload(0);
+        ib.invokeVirtual("java/lang/Class", "getSuperclass", "()Ljava/lang/Class;");
+        ib.astore(superClass);
+        ib.aload(superClass);
+        ib.ifNull(noSuperClass);
+        ib.aload(superClass);
+        ib.aload(1);
+        ib.aload(2);
+        ib.invokeStatic(
+                className(),
+                "findMethod",
+                "(Ljava/lang/Class;Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
+        ib.areturn();
+
+        ib.label(noSuperClass);
+        ib.new_("java/lang/NoSuchMethodException");
+        ib.dup();
+        ib.new_("java/lang/StringBuilder");
+        ib.dup();
+        ib.aload(0);
+        ib.invokeVirtual("java/lang/Class", "getName", "()Ljava/lang/String;");
+        ib.invokeSpecial("java/lang/StringBuilder", "<init>", "(Ljava/lang/String;)V");
+        appendString(ib, ".");
+        ib.aload(1);
+        ib.invokeVirtual("java/lang/StringBuilder", "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
+        ib.invokeVirtual("java/lang/StringBuilder", "toString", "()Ljava/lang/String;");
+        ib.invokeSpecial("java/lang/NoSuchMethodException", "<init>", "(Ljava/lang/String;)V");
+        ib.athrow();
+        return method;
+    }
+
     private MethodNode genInvokeMethod()
     {
         MethodNode method = MethodUtils.newMethodNode(
@@ -1070,6 +1291,7 @@ public class VMGenerator extends ClassObj
         int target = 7;
         int ownerClass = 8;
         int exception = 9;
+        int reflectedMethod = 10;
 
         LabelNode normalInvoke = new LabelNode();
         ib.iload(3);
@@ -1095,7 +1317,7 @@ public class VMGenerator extends ClassObj
         ib.getStatic(className(), "METHOD_HANDLES", "Ljava/util/Map;");
         ib.aload(key);
         ib.invokeInterface("java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
-        ib.checkCast("java/lang/reflect/Method");
+        ib.checkCast("java/lang/invoke/MethodHandle");
         ib.astore(target);
 
         LabelNode methodReady = new LabelNode();
@@ -1113,11 +1335,13 @@ public class VMGenerator extends ClassObj
         LabelNode modifiersMatch = new LabelNode();
         LabelNode throwReflectionFailure = new LabelNode();
         LabelNode cacheMethod = new LabelNode();
+        LabelNode cacheTarget = new LabelNode();
+        LabelNode directLookup = new LabelNode();
         method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
                 reflectionStart,
                 reflectionEnd,
                 reflectionHandler,
-                "java/lang/ReflectiveOperationException"));
+                "java/lang/Throwable"));
         method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
                 publicLookupStart,
                 publicLookupEnd,
@@ -1135,17 +1359,17 @@ public class VMGenerator extends ClassObj
         ib.aload(1);
         ib.aload(2);
         ib.invokeVirtual("java/lang/invoke/MethodType", "parameterArray", "()[Ljava/lang/Class;");
-        ib.invokeVirtual(
-                "java/lang/Class",
-                "getDeclaredMethod",
-                "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
-        ib.astore(target);
+        ib.invokeStatic(
+                className(),
+                "findMethod",
+                "(Ljava/lang/Class;Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
+        ib.astore(reflectedMethod);
         ib.label(methodFound);
-        ib.aload(target);
+        ib.aload(reflectedMethod);
         ib.iconst1();
         ib.invokeVirtual("java/lang/reflect/Method", "setAccessible", "(Z)V");
 
-        ib.aload(target);
+        ib.aload(reflectedMethod);
         ib.invokeVirtual("java/lang/reflect/Method", "getReturnType", "()Ljava/lang/Class;");
         ib.aload(2);
         ib.invokeVirtual("java/lang/invoke/MethodType", "returnType", "()Ljava/lang/Class;");
@@ -1153,7 +1377,7 @@ public class VMGenerator extends ClassObj
         emitNoSuchMethod(ib, ownerClass);
 
         ib.label(returnTypeMatches);
-        ib.aload(target);
+        ib.aload(reflectedMethod);
         ib.invokeVirtual("java/lang/reflect/Method", "getModifiers", "()I");
         ib.invokeStatic("java/lang/reflect/Modifier", "isStatic", "(I)Z");
         ib.iload(3);
@@ -1162,6 +1386,16 @@ public class VMGenerator extends ClassObj
 
         ib.label(modifiersMatch);
         ib.label(cacheMethod);
+        ib.aload(reflectedMethod);
+        ib.iload(3);
+        ib.aload(2);
+        ib.invokeVirtual("java/lang/invoke/MethodType", "parameterCount", "()I");
+        ib.invokeStatic(
+                className(),
+                "adaptMethodHandle",
+                "(Ljava/lang/reflect/Method;ZI)Ljava/lang/invoke/MethodHandle;");
+        ib.astore(target);
+        ib.label(cacheTarget);
         ib.getStatic(className(), "METHOD_HANDLES", "Ljava/util/Map;");
         ib.aload(key);
         ib.aload(target);
@@ -1175,7 +1409,7 @@ public class VMGenerator extends ClassObj
         ib.astore(exception);
         ib.aload(exception);
         ib.instanceOf("java/lang/NoSuchMethodException");
-        ib.ifeq(throwReflectionFailure);
+        ib.ifeq(directLookup);
 
         ib.label(publicLookupStart);
         ib.aload(ownerClass);
@@ -1186,12 +1420,27 @@ public class VMGenerator extends ClassObj
                 "java/lang/Class",
                 "getMethod",
                 "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
-        ib.astore(target);
+        ib.astore(reflectedMethod);
         ib.label(publicLookupEnd);
         ib.goto_(methodFound);
 
         ib.label(publicLookupHandler);
         ib.astore(exception);
+
+        ib.label(directLookup);
+        ib.aload(exception);
+        ib.instanceOf("java/lang/reflect/InaccessibleObjectException");
+        ib.ifeq(throwReflectionFailure);
+        ib.aload(ownerClass);
+        ib.aload(1);
+        ib.aload(2);
+        ib.iload(3);
+        ib.invokeStatic(
+                className(),
+                "adaptDirectMethodHandle",
+                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;Z)Ljava/lang/invoke/MethodHandle;");
+        ib.astore(target);
+        ib.goto_(cacheTarget);
 
         ib.label(throwReflectionFailure);
         ib.new_("java/lang/IllegalStateException");
@@ -1201,44 +1450,23 @@ public class VMGenerator extends ClassObj
         ib.athrow();
 
         ib.label(methodReady);
-        emitCoerceArguments(ib, 5, 2, 10);
+        emitCoerceArguments(ib, 5, 2, 11);
 
         LabelNode invokeStart = new LabelNode();
         LabelNode invokeEnd = new LabelNode();
-        LabelNode invocationTargetHandler = new LabelNode();
         LabelNode invokeHandler = new LabelNode();
-        LabelNode staticReceiver = new LabelNode();
-        LabelNode receiverReady = new LabelNode();
-        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
-                invokeStart,
-                invokeEnd,
-                invocationTargetHandler,
-                "java/lang/reflect/InvocationTargetException"));
         method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
                 invokeStart, invokeEnd, invokeHandler, "java/lang/Throwable"));
         ib.label(invokeStart);
         ib.aload(target);
-        ib.iload(3);
-        ib.ifne(staticReceiver);
         ib.aload(4);
-        ib.goto_(receiverReady);
-        ib.label(staticReceiver);
-        ib.aconstNull();
-        ib.label(receiverReady);
         ib.aload(5);
         ib.invokeVirtual(
-                "java/lang/reflect/Method",
-                "invoke",
+                "java/lang/invoke/MethodHandle",
+                "invokeExact",
                 "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
         ib.label(invokeEnd);
         ib.areturn();
-
-        ib.label(invocationTargetHandler);
-        ib.astore(exception);
-        ib.aload(exception);
-        ib.invokeVirtual("java/lang/reflect/InvocationTargetException", "getCause", "()Ljava/lang/Throwable;");
-        ib.invokeStatic(className(), "rethrow", "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;");
-        ib.athrow();
 
         ib.label(invokeHandler);
         ib.astore(exception);
@@ -1255,26 +1483,43 @@ public class VMGenerator extends ClassObj
                 "construct",
                 "(Ljava/lang/String;Ljava/lang/invoke/MethodType;[Ljava/lang/Object;)Ljava/lang/Object;");
         InsnBuilder ib = new InsnBuilder(method.instructions);
-        int ownerClass = 3;
-        int constructor = 4;
-        int exception = 5;
+        int key = 3;
+        int target = 4;
+        int ownerClass = 5;
+        int constructor = 6;
+        int exception = 7;
 
-        LabelNode start = new LabelNode();
-        LabelNode end = new LabelNode();
-        LabelNode invocationTargetHandler = new LabelNode();
-        LabelNode handler = new LabelNode();
+        ib.new_("java/lang/StringBuilder");
+        ib.dup();
+        ib.ldc("<init>:");
+        ib.invokeSpecial("java/lang/StringBuilder", "<init>", "(Ljava/lang/String;)V");
+        ib.aload(0);
+        ib.invokeVirtual("java/lang/StringBuilder", "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
+        ib.aload(1);
+        ib.invokeVirtual("java/lang/StringBuilder", "append", "(Ljava/lang/Object;)Ljava/lang/StringBuilder;");
+        ib.invokeVirtual("java/lang/StringBuilder", "toString", "()Ljava/lang/String;");
+        ib.astore(key);
+
+        ib.getStatic(className(), "METHOD_HANDLES", "Ljava/util/Map;");
+        ib.aload(key);
+        ib.invokeInterface("java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
+        ib.checkCast("java/lang/invoke/MethodHandle");
+        ib.astore(target);
+
+        LabelNode targetReady = new LabelNode();
+        ib.aload(target);
+        ib.ifNonNull(targetReady);
+
+        LabelNode resolveStart = new LabelNode();
+        LabelNode resolveEnd = new LabelNode();
+        LabelNode resolveHandler = new LabelNode();
         method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
-                start,
-                end,
-                invocationTargetHandler,
-                "java/lang/reflect/InvocationTargetException"));
-        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
-                start,
-                end,
-                handler,
+                resolveStart,
+                resolveEnd,
+                resolveHandler,
                 "java/lang/Throwable"));
 
-        ib.label(start);
+        ib.label(resolveStart);
         ib.aload(0);
         ib.invokeStatic(className(), "loadOwner", "(Ljava/lang/String;)Ljava/lang/Class;");
         ib.astore(ownerClass);
@@ -1291,29 +1536,223 @@ public class VMGenerator extends ClassObj
         ib.iconst1();
         ib.invokeVirtual("java/lang/reflect/Constructor", "setAccessible", "(Z)V");
 
-        emitCoerceArguments(ib, 2, 1, 6);
-
         ib.aload(constructor);
+        ib.aload(1);
+        ib.invokeVirtual("java/lang/invoke/MethodType", "parameterCount", "()I");
+        ib.invokeStatic(
+                className(),
+                "adaptConstructorHandle",
+                "(Ljava/lang/reflect/Constructor;I)Ljava/lang/invoke/MethodHandle;");
+        ib.astore(target);
+
+        ib.getStatic(className(), "METHOD_HANDLES", "Ljava/util/Map;");
+        ib.aload(key);
+        ib.aload(target);
+        ib.invokeInterface(
+                "java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+        ib.pop();
+        ib.label(resolveEnd);
+        ib.goto_(targetReady);
+
+        ib.label(resolveHandler);
+        ib.astore(exception);
+        ib.aload(exception);
+        ib.invokeStatic(className(), "rethrow", "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;");
+        ib.athrow();
+
+        ib.label(targetReady);
+        emitCoerceArguments(ib, 2, 1, 8);
+
+        LabelNode invokeStart = new LabelNode();
+        LabelNode invokeEnd = new LabelNode();
+        LabelNode invokeHandler = new LabelNode();
+        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
+                invokeStart,
+                invokeEnd,
+                invokeHandler,
+                "java/lang/Throwable"));
+
+        ib.label(invokeStart);
+        ib.aload(target);
+        ib.aconstNull();
         ib.aload(2);
         ib.invokeVirtual(
-                "java/lang/reflect/Constructor",
-                "newInstance",
-                "([Ljava/lang/Object;)Ljava/lang/Object;");
-        ib.label(end);
+                "java/lang/invoke/MethodHandle",
+                "invokeExact",
+                "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
+        ib.label(invokeEnd);
         ib.areturn();
 
-        ib.label(invocationTargetHandler);
+        ib.label(invokeHandler);
         ib.astore(exception);
         ib.aload(exception);
-        ib.invokeVirtual("java/lang/reflect/InvocationTargetException", "getCause", "()Ljava/lang/Throwable;");
         ib.invokeStatic(className(), "rethrow", "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;");
         ib.athrow();
+        return method;
+    }
 
-        ib.label(handler);
-        ib.astore(exception);
-        ib.aload(exception);
-        ib.invokeStatic(className(), "rethrow", "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;");
-        ib.athrow();
+    private MethodNode genAdaptMethodHandleMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(
+                new Acc[]{Acc.PRIVATE, Acc.STATIC},
+                "adaptMethodHandle",
+                "(Ljava/lang/reflect/Method;ZI)Ljava/lang/invoke/MethodHandle;",
+                new String[]{"java/lang/IllegalAccessException"});
+        InsnBuilder ib = new InsnBuilder(method.instructions);
+        int handle = 3;
+        LabelNode instanceMethod = new LabelNode();
+
+        ib.invokeStatic("java/lang/invoke/MethodHandles", "lookup", "()Ljava/lang/invoke/MethodHandles$Lookup;");
+        ib.aload(0);
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "unreflect",
+                "(Ljava/lang/reflect/Method;)Ljava/lang/invoke/MethodHandle;");
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandle",
+                "asFixedArity",
+                "()Ljava/lang/invoke/MethodHandle;");
+        ib.ldc(org.objectweb.asm.Type.getType("[Ljava/lang/Object;"));
+        ib.iload(2);
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandle",
+                "asSpreader",
+                "(Ljava/lang/Class;I)Ljava/lang/invoke/MethodHandle;");
+        ib.astore(handle);
+
+        ib.iload(1);
+        ib.ifeq(instanceMethod);
+        emitDropLeadingObjectArgument(ib, handle);
+
+        ib.label(instanceMethod);
+        ib.aload(handle);
+        emitInvokerHandleType(ib);
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandle",
+                "asType",
+                "(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
+        ib.areturn();
+        return method;
+    }
+
+    private MethodNode genAdaptDirectMethodHandleMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(
+                new Acc[]{Acc.PRIVATE, Acc.STATIC},
+                "adaptDirectMethodHandle",
+                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;Z)Ljava/lang/invoke/MethodHandle;",
+                new String[]{"java/lang/IllegalAccessException", "java/lang/NoSuchMethodException"});
+        InsnBuilder ib = new InsnBuilder(method.instructions);
+        int lookup = 4;
+        int handle = 5;
+        LabelNode virtualMethod = new LabelNode();
+
+        ib.aload(0);
+        ib.invokeStatic("java/lang/invoke/MethodHandles", "lookup", "()Ljava/lang/invoke/MethodHandles$Lookup;");
+        ib.invokeStatic(
+                "java/lang/invoke/MethodHandles",
+                "privateLookupIn",
+                "(Ljava/lang/Class;Ljava/lang/invoke/MethodHandles$Lookup;)Ljava/lang/invoke/MethodHandles$Lookup;");
+        ib.astore(lookup);
+
+        ib.iload(3);
+        ib.ifeq(virtualMethod);
+        ib.aload(lookup);
+        ib.aload(0);
+        ib.aload(1);
+        ib.aload(2);
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "findStatic",
+                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandle",
+                "asFixedArity",
+                "()Ljava/lang/invoke/MethodHandle;");
+        ib.ldc(org.objectweb.asm.Type.getType("[Ljava/lang/Object;"));
+        ib.aload(2);
+        ib.invokeVirtual("java/lang/invoke/MethodType", "parameterCount", "()I");
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandle",
+                "asSpreader",
+                "(Ljava/lang/Class;I)Ljava/lang/invoke/MethodHandle;");
+        ib.astore(handle);
+        emitDropLeadingObjectArgument(ib, handle);
+        ib.aload(handle);
+        emitInvokerHandleType(ib);
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandle",
+                "asType",
+                "(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
+        ib.areturn();
+
+        ib.label(virtualMethod);
+        ib.aload(lookup);
+        ib.aload(0);
+        ib.aload(1);
+        ib.aload(2);
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "findVirtual",
+                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandle",
+                "asFixedArity",
+                "()Ljava/lang/invoke/MethodHandle;");
+        ib.ldc(org.objectweb.asm.Type.getType("[Ljava/lang/Object;"));
+        ib.aload(2);
+        ib.invokeVirtual("java/lang/invoke/MethodType", "parameterCount", "()I");
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandle",
+                "asSpreader",
+                "(Ljava/lang/Class;I)Ljava/lang/invoke/MethodHandle;");
+        ib.astore(handle);
+        ib.aload(handle);
+        emitInvokerHandleType(ib);
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandle",
+                "asType",
+                "(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
+        ib.areturn();
+        return method;
+    }
+
+    private MethodNode genAdaptConstructorHandleMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(
+                new Acc[]{Acc.PRIVATE, Acc.STATIC},
+                "adaptConstructorHandle",
+                "(Ljava/lang/reflect/Constructor;I)Ljava/lang/invoke/MethodHandle;",
+                new String[]{"java/lang/IllegalAccessException"});
+        InsnBuilder ib = new InsnBuilder(method.instructions);
+        int handle = 2;
+
+        ib.invokeStatic("java/lang/invoke/MethodHandles", "lookup", "()Ljava/lang/invoke/MethodHandles$Lookup;");
+        ib.aload(0);
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandles$Lookup",
+                "unreflectConstructor",
+                "(Ljava/lang/reflect/Constructor;)Ljava/lang/invoke/MethodHandle;");
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandle",
+                "asFixedArity",
+                "()Ljava/lang/invoke/MethodHandle;");
+        ib.ldc(org.objectweb.asm.Type.getType("[Ljava/lang/Object;"));
+        ib.iload(1);
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandle",
+                "asSpreader",
+                "(Ljava/lang/Class;I)Ljava/lang/invoke/MethodHandle;");
+        ib.astore(handle);
+
+        emitDropLeadingObjectArgument(ib, handle);
+        ib.aload(handle);
+        emitInvokerHandleType(ib);
+        ib.invokeVirtual(
+                "java/lang/invoke/MethodHandle",
+                "asType",
+                "(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
+        ib.areturn();
         return method;
     }
 
@@ -1474,6 +1913,21 @@ public class VMGenerator extends ClassObj
                 "loadOwner",
                 "(Ljava/lang/String;)Ljava/lang/Class;");
         InsnBuilder ib = new InsnBuilder(method.instructions);
+        ib.aload(0);
+        ib.ldc(org.objectweb.asm.Type.getObjectType(className()));
+        ib.invokeVirtual("java/lang/Class", "getClassLoader", "()Ljava/lang/ClassLoader;");
+        ib.invokeStatic(className(), "loadOwner", "(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/Class;");
+        ib.areturn();
+        return method;
+    }
+
+    private MethodNode genLoadOwnerWithLoaderMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(
+                new Acc[]{Acc.PRIVATE, Acc.STATIC},
+                "loadOwner",
+                "(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/Class;");
+        InsnBuilder ib = new InsnBuilder(method.instructions);
         LabelNode primitiveBoolean = new LabelNode();
         LabelNode primitiveChar = new LabelNode();
         LabelNode primitiveByte = new LabelNode();
@@ -1566,8 +2020,7 @@ public class VMGenerator extends ClassObj
         ib.bipush('.');
         ib.invokeVirtual("java/lang/String", "replace", "(CC)Ljava/lang/String;");
         ib.iconst0();
-        ib.ldc(org.objectweb.asm.Type.getObjectType(className()));
-        ib.invokeVirtual("java/lang/Class", "getClassLoader", "()Ljava/lang/ClassLoader;");
+        ib.aload(1);
         ib.invokeStatic(
                 "java/lang/Class",
                 "forName",
@@ -1798,6 +2251,70 @@ public class VMGenerator extends ClassObj
         ib.invokeVirtual("java/lang/StringBuilder", "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
     }
 
+    private static void emitDropLeadingObjectArgument(InsnBuilder ib, int handleLocal)
+    {
+        ib.aload(handleLocal);
+        ib.iconst0();
+        ib.iconst1();
+        ib.aneArray("java/lang/Class");
+        ib.dup();
+        ib.iconst0();
+        emitObjectClass(ib);
+        ib.aastore();
+        ib.invokeStatic(
+                "java/lang/invoke/MethodHandles",
+                "dropArguments",
+                "(Ljava/lang/invoke/MethodHandle;I[Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;");
+        ib.astore(handleLocal);
+    }
+
+    private static void emitInvokerHandleType(InsnBuilder ib)
+    {
+        emitObjectClass(ib);
+        emitObjectClass(ib);
+        ib.iconst1();
+        ib.aneArray("java/lang/Class");
+        ib.dup();
+        ib.iconst0();
+        ib.ldc(org.objectweb.asm.Type.getType("[Ljava/lang/Object;"));
+        ib.aastore();
+        ib.invokeStatic(
+                "java/lang/invoke/MethodType",
+                "methodType",
+                "(Ljava/lang/Class;Ljava/lang/Class;[Ljava/lang/Class;)Ljava/lang/invoke/MethodType;");
+    }
+
+    private static void emitGetterHandleType(InsnBuilder ib)
+    {
+        emitObjectClass(ib);
+        emitObjectClass(ib);
+        ib.invokeStatic(
+                "java/lang/invoke/MethodType",
+                "methodType",
+                "(Ljava/lang/Class;Ljava/lang/Class;)Ljava/lang/invoke/MethodType;");
+    }
+
+    private static void emitSetterHandleType(InsnBuilder ib)
+    {
+        ib.getStatic("java/lang/Void", "TYPE", "Ljava/lang/Class;");
+        emitObjectClass(ib);
+        ib.iconst1();
+        ib.aneArray("java/lang/Class");
+        ib.dup();
+        ib.iconst0();
+        emitObjectClass(ib);
+        ib.aastore();
+        ib.invokeStatic(
+                "java/lang/invoke/MethodType",
+                "methodType",
+                "(Ljava/lang/Class;Ljava/lang/Class;[Ljava/lang/Class;)Ljava/lang/invoke/MethodType;");
+    }
+
+    private static void emitObjectClass(InsnBuilder ib)
+    {
+        ib.ldc(org.objectweb.asm.Type.getType("Ljava/lang/Object;"));
+    }
+
     private static void emitNoSuchField(InsnBuilder ib, int ownerClassLocal)
     {
         ib.new_("java/lang/NoSuchFieldException");
@@ -1860,6 +2377,11 @@ public class VMGenerator extends ClassObj
         ib.dup();
         ib.invokeSpecial("java/util/concurrent/ConcurrentHashMap", "<init>", "()V");
         ib.putStatic(className(), "METHOD_HANDLES", "Ljava/util/Map;");
+
+        ib.new_("java/util/concurrent/ConcurrentHashMap");
+        ib.dup();
+        ib.invokeSpecial("java/util/concurrent/ConcurrentHashMap", "<init>", "()V");
+        ib.putStatic(className(), "METHOD_TYPES", "Ljava/util/Map;");
 
         ib.new_("java/util/WeakHashMap");
         ib.dup();

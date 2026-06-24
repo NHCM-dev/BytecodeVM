@@ -34,7 +34,7 @@ public class ReturnBranch extends InterpretBranch
         }
         else
         {
-            context.popObject(ib);
+            popObject(ib, context);
         }
         ib.putField(context.frameClassName, "returnValue", "Ljava/lang/Object;");
 

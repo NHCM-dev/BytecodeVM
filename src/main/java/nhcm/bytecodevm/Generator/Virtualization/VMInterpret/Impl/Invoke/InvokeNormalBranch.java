@@ -5,7 +5,6 @@ import nhcm.bytecodevm.Enums.VMOpcode;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretContext;
 import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
-import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.LabelNode;
 
@@ -30,12 +29,10 @@ public class InvokeNormalBranch extends InterpretBranch
         ib.astore(InterpretContext.INVOKE_NAME);
 
         readConstantString(ib, context);
-        ib.ldc(Type.getObjectType(context.vmClassName));
-        ib.invokeVirtual("java/lang/Class", "getClassLoader", "()Ljava/lang/ClassLoader;");
         ib.invokeStatic(
-                "java/lang/invoke/MethodType",
-                "fromMethodDescriptorString",
-                "(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType;");
+                context.vmClassName,
+                "methodType",
+                "(Ljava/lang/String;)Ljava/lang/invoke/MethodType;");
         ib.astore(InterpretContext.INVOKE_TYPE);
 
         // The interface flag is compile-time metadata; the runtime helper resolves
@@ -132,15 +129,15 @@ public class InvokeNormalBranch extends InterpretBranch
         LabelNode category2 = new LabelNode();
         ib.aload(InterpretContext.INVOKE_TYPE);
         ib.invokeVirtual("java/lang/invoke/MethodType", "returnType", "()Ljava/lang/Class;");
+        ib.astore(InterpretContext.INVOKE_RETURN_TYPE);
+        ib.aload(InterpretContext.INVOKE_RETURN_TYPE);
         ib.getStatic("java/lang/Void", "TYPE", "Ljava/lang/Class;");
         ib.ifAcmpEq(done);
 
-        ib.aload(InterpretContext.INVOKE_TYPE);
-        ib.invokeVirtual("java/lang/invoke/MethodType", "returnType", "()Ljava/lang/Class;");
+        ib.aload(InterpretContext.INVOKE_RETURN_TYPE);
         ib.getStatic("java/lang/Long", "TYPE", "Ljava/lang/Class;");
         ib.ifAcmpEq(category2);
-        ib.aload(InterpretContext.INVOKE_TYPE);
-        ib.invokeVirtual("java/lang/invoke/MethodType", "returnType", "()Ljava/lang/Class;");
+        ib.aload(InterpretContext.INVOKE_RETURN_TYPE);
         ib.getStatic("java/lang/Double", "TYPE", "Ljava/lang/Class;");
         ib.ifAcmpEq(category2);
 

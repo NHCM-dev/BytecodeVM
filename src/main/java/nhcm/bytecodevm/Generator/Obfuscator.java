@@ -13,6 +13,8 @@ import nhcm.bytecodevm.Utils.LogColors;
 import nhcm.bytecodevm.Utils.MethodUtils;
 import nhcm.bytecodevm.Utils.RandomUtils;
 import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.AbstractInsnNode;
+import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -111,7 +113,134 @@ public class Obfuscator
 
     private static boolean shouldIgnoreMethod(MethodNode methodNode)
     {
-        return MethodUtils.isAbstract(methodNode) || MethodUtils.isNative(methodNode);
+        return MethodUtils.isAbstract(methodNode) ||
+                MethodUtils.isNative(methodNode) ||
+                usesStackTraceIntrospection(methodNode);
+    }
+
+    private static String methodKey(MethodNode methodNode)
+    {
+        return methodNode.name + methodNode.desc;
+    }
+
+    private static Set<String> stackTraceSensitiveMethods(ClassNode classNode)
+    {
+        Set<String> sensitiveMethods = new HashSet<>();
+        for (MethodNode methodNode : classNode.methods)
+        {
+            if (usesStackTraceIntrospection(methodNode))
+            {
+                sensitiveMethods.add(methodKey(methodNode));
+            }
+        }
+
+        boolean changed;
+        do
+        {
+            changed = false;
+            for (MethodNode methodNode : classNode.methods)
+            {
+                String key = methodKey(methodNode);
+                if (sensitiveMethods.contains(key))
+                {
+                    continue;
+                }
+                if (callsSensitiveMethod(classNode, methodNode, sensitiveMethods))
+                {
+                    sensitiveMethods.add(key);
+                    changed = true;
+                }
+            }
+        } while (changed);
+
+        return sensitiveMethods;
+    }
+
+    private static boolean callsSensitiveMethod(ClassNode classNode, MethodNode methodNode, Set<String> sensitiveMethods)
+    {
+        for (AbstractInsnNode insn : methodNode.instructions)
+        {
+            if (!(insn instanceof MethodInsnNode methodInsn))
+            {
+                continue;
+            }
+            if (classNode.name.equals(methodInsn.owner) &&
+                    sensitiveMethods.contains(methodInsn.name + methodInsn.desc))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static Set<String> securityManagerClasses(Collection<ClassNode> classNodes)
+    {
+        Map<String, String> superNames = new HashMap<>();
+        for (ClassNode classNode : classNodes)
+        {
+            superNames.put(classNode.name, classNode.superName);
+        }
+
+        Set<String> securityManagers = new HashSet<>();
+        boolean changed;
+        do
+        {
+            changed = false;
+            for (ClassNode classNode : classNodes)
+            {
+                if (securityManagers.contains(classNode.name))
+                {
+                    continue;
+                }
+                String superName = classNode.superName;
+                if ("java/lang/SecurityManager".equals(superName) || securityManagers.contains(superName))
+                {
+                    securityManagers.add(classNode.name);
+                    changed = true;
+                    continue;
+                }
+                while (superNames.containsKey(superName))
+                {
+                    superName = superNames.get(superName);
+                    if ("java/lang/SecurityManager".equals(superName) || securityManagers.contains(superName))
+                    {
+                        securityManagers.add(classNode.name);
+                        changed = true;
+                        break;
+                    }
+                }
+            }
+        } while (changed);
+
+        return securityManagers;
+    }
+
+    private static boolean usesStackTraceIntrospection(MethodNode methodNode)
+    {
+        for (AbstractInsnNode insn : methodNode.instructions)
+        {
+            if (!(insn instanceof MethodInsnNode methodInsn))
+            {
+                continue;
+            }
+            if ("java/lang/Throwable".equals(methodInsn.owner) &&
+                    "getStackTrace".equals(methodInsn.name) &&
+                    "()[Ljava/lang/StackTraceElement;".equals(methodInsn.desc))
+            {
+                return true;
+            }
+            if ("java/lang/Thread".equals(methodInsn.owner) &&
+                    "getStackTrace".equals(methodInsn.name) &&
+                    "()[Ljava/lang/StackTraceElement;".equals(methodInsn.desc))
+            {
+                return true;
+            }
+            if (methodInsn.owner.startsWith("java/lang/StackWalker"))
+            {
+                return true;
+            }
+        }
+        return false;
     }
 
     private void processJar(JarTransformer.JarContext context)
@@ -122,6 +251,7 @@ public class Obfuscator
         List<VMSetGenerator> perClasses = new ArrayList<>();
         List<VMSetGenerator> perMethods = new ArrayList<>();
         Map<String, VMSetGenerator> perPackage = new LinkedHashMap<>();
+        Set<String> securityManagerClasses = securityManagerClasses(context.classes.values());
         int matchedMethods = 0;
         for (ClassNode classNode : context.classes.values())
         {
@@ -148,9 +278,12 @@ public class Obfuscator
             {
                 perClasses.add(perClass);
             }
+            Set<String> stackTraceSensitiveMethods = stackTraceSensitiveMethods(classNode);
             for(MethodNode methodNode : classNode.methods)
             {
-                if(shouldIgnoreMethod(methodNode))
+                if(securityManagerClasses.contains(classNode.name) ||
+                        shouldIgnoreMethod(methodNode) ||
+                        stackTraceSensitiveMethods.contains(methodKey(methodNode)))
                 {
                     continue;
                 }

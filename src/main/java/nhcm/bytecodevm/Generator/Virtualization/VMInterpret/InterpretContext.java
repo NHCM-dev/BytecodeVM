@@ -34,6 +34,10 @@ public final class InterpretContext
     public static final int INSTRUCTION_PC = 42;
     public static final int THROWN = 43;
     public static final int HANDLER_PC = 44;
+    public static final int STACK_INDEX = 45;
+    public static final int STACK_TYPE = 46;
+    public static final int STACK_OBJECT = 47;
+    public static final int INVOKE_RETURN_TYPE = 48;
     public static final int JUMP_TARGET = 9;
     public static final int SWITCH_KEY = 10;
     public static final int SWITCH_MIN = 11;
@@ -88,9 +92,12 @@ public final class InterpretContext
     {
         ib.aload(CODE);
         loadFrame(ib);
-        ib.invokeStatic(
-                vmClassName,
-                "nextToken",
-                "([IL" + frameClassName + ";)I");
+        ib.dup();
+        ib.getField(frameClassName, "programCounter", "I");
+        ib.dupX1();
+        ib.iconst1();
+        ib.iadd();
+        ib.putField(frameClassName, "programCounter", "I");
+        ib.iaload();
     }
 }
