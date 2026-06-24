@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'BytecodeVM'
-version = 'Indev'
+version = '1.0.0'
 
 java {
     toolchain {
@@ -45,5 +45,5 @@ jar {
 }
 
 shadowJar {
-    archiveClassifier.set('full')
+    archiveClassifier.set('')
 }
