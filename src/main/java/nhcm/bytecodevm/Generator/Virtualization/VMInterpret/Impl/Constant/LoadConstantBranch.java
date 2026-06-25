@@ -23,7 +23,7 @@ public class LoadConstantBranch extends InterpretBranch
         Local constantIndex = context.intLocal("constantIndex", InterpretContext.RIGHT_VALUE);
         Local constant = context.objectLocal("constant", InterpretContext.DUP_VALUE_1);
 
-        context.nextToken(ib, constantIndex);
+        context.nextOperand(ib, constantIndex);
         ib.set(constant, AdvInsnBuilder.arrayAt(context.constants(), constantIndex));
         ib.set(constant, AdvInsnBuilder.callStatic(
                 context.vm.owner,

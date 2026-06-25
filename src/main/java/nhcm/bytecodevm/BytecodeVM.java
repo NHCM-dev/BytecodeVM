@@ -13,7 +13,7 @@ public class BytecodeVM
 {
     private static final Logger logger = LoggerFactory.getLogger(BytecodeVM.class);
 
-    private static final String version = "1.0.0";
+    private static final String version = "1.1.0";
 
     private static final String defaultConfig = """
             {
@@ -24,6 +24,16 @@ public class BytecodeVM
               "mutateMode": "ALL_RANDOM_INT", // ALL_RANDOM_INT, ALL_RESORT, ALL_AUTO_CHOOSE, NO_CHANGE
               "renameMode": "DISABLE", // ENABLE, DISABLE
               "interpretMode": "SAVE_ONLY_REQUIRED_INSTRUCTION", // SAVE_ALL_INSTRUCTION, SAVE_ONLY_REQUIRED_INSTRUCTION
+              "protectCodePool": true,
+              "virtualizeInstructionAddresses": true,
+              "encryptOperands": true,
+              "perMethodOpcodeMap": true,
+              "shuffleConstants": true,
+              "bindConstantsToOperands": true,
+              "splitCodeStreams": true,
+              "shuffleInstructionBlocks": true,
+              "obfuscateDispatch": true,
+              "dynamicCodePoolBuild": true,
               "includes": ["*", "* *(*)*"],
               "exclusions": ["* <init>(*)V", "* <clinit>()V"]
             }
@@ -42,13 +52,19 @@ public class BytecodeVM
             ██╔══██╗  ╚██╔╝     ██║   ██╔══╝  ██║     ██║   ██║██║  ██║██╔══╝  ╚██╗ ██╔╝██║╚██╔╝██║
             ██████╔╝   ██║      ██║   ███████╗╚██████╗╚██████╔╝██████╔╝███████╗ ╚████╔╝ ██║ ╚═╝ ██║
             ╚═════╝    ╚═╝      ╚═╝   ╚══════╝ ╚═════╝ ╚═════╝ ╚═════╝ ╚══════╝  ╚═══╝  ╚═╝     ╚═╝
-            e
+            
             By NHCM, Version %s
+            
+            MUST READ:
+            This obfuscator is used for demo only, not for production use.
+            It can make your program hundreds of times slower.
+            Its purpose is to demonstrate the concept of bytecode virtualization.
             """.formatted(version);
 
-    public static void main(String[] args)
+    public static void main(String[] args) throws InterruptedException
     {
         System.out.println(asciiArt);
+        Thread.sleep(1000);
         int exitCode = run(args);
         if(exitCode != 0)
         {

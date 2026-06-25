@@ -43,16 +43,16 @@ public class SwitchBranch extends InterpretBranch
         var index = context.intLocal("switchIndex", InterpretContext.SWITCH_INDEX);
         var candidate = context.intLocal("switchCandidate", InterpretContext.SWITCH_CANDIDATE);
 
-        context.nextToken(ib, min);
-        context.nextToken(ib, ignoredMax);
-        context.nextToken(ib, jumpTarget);
-        context.nextToken(ib, count);
+        context.nextOperand(ib, min);
+        context.nextOperand(ib, ignoredMax);
+        context.nextOperand(ib, jumpTarget);
+        context.nextOperand(ib, count);
 
         ib.set(index, AdvInsnBuilder.constant(0));
         ib.whileLoop(
                 AdvInsnBuilder.lessThan(index, count),
                 b -> {
-                    context.nextToken(b, candidate);
+                    context.nextOperand(b, candidate);
                     b.ifCondition(
                             AdvInsnBuilder.equal(
                                     context.intLocal("switchKey", InterpretContext.SWITCH_KEY),
@@ -70,15 +70,15 @@ public class SwitchBranch extends InterpretBranch
         var key = context.intLocal("lookupKey", InterpretContext.SWITCH_MIN);
         var candidate = context.intLocal("switchCandidate", InterpretContext.SWITCH_CANDIDATE);
 
-        context.nextToken(ib, jumpTarget);
-        context.nextToken(ib, count);
+        context.nextOperand(ib, jumpTarget);
+        context.nextOperand(ib, count);
 
         ib.set(index, AdvInsnBuilder.constant(0));
         ib.whileLoop(
                 AdvInsnBuilder.lessThan(index, count),
                 b -> {
-                    context.nextToken(b, key);
-                    context.nextToken(b, candidate);
+                    context.nextOperand(b, key);
+                    context.nextOperand(b, candidate);
                     b.ifCondition(
                             AdvInsnBuilder.equal(
                                     context.intLocal("switchKey", InterpretContext.SWITCH_KEY),

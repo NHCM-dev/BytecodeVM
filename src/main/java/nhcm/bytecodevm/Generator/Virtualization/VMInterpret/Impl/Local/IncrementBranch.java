@@ -28,8 +28,8 @@ public class IncrementBranch extends InterpretBranch
         Local localIndex = context.intLocal("localIndex", InterpretContext.RIGHT_VALUE);
         Local increment = context.intLocal("increment", InterpretContext.LEFT_VALUE);
 
-        context.nextToken(ib, localIndex);
-        context.nextToken(ib, increment);
+        context.nextOperand(ib, localIndex);
+        context.nextOperand(ib, increment);
         ib.setArray(
                 context.locals(),
                 localIndex,

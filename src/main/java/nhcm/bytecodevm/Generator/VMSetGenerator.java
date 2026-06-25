@@ -126,6 +126,7 @@ public class VMSetGenerator
                     partitions.get(index),
                     vmProgramGenerator,
                     vmCodePoolGenerator,
+                    config,
                     true));
         }
     }
@@ -171,6 +172,7 @@ public class VMSetGenerator
                 methods,
                 vmProgramGenerator,
                 vmCodePoolGenerator,
+                config,
                 false);
         return candidate.getMaxGeneratedMethodSize() <= CODE_POOL_METHOD_SIZE_LIMIT;
     }

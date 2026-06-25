@@ -37,7 +37,7 @@ public class NewArrayBranch extends InterpretBranch
         Local atype = context.intLocal("arrayAType", InterpretContext.ARRAY_ATYPE);
         Local component = context.local("arrayComponent", "java/lang/Class", InterpretContext.ARRAY_COMPONENT);
 
-        context.nextToken(ib, atype);
+        context.nextOperand(ib, atype);
         ib.switchLookup(
                 atype,
                 b -> b.throwValue(AdvInsnBuilder.newObject(
@@ -60,7 +60,7 @@ public class NewArrayBranch extends InterpretBranch
         Local classIndex = context.intLocal("arrayClassIndex", InterpretContext.ARRAY_ATYPE);
         Local component = context.local("arrayComponent", "java/lang/Class", InterpretContext.ARRAY_COMPONENT);
 
-        context.nextToken(ib, classIndex);
+        context.nextOperand(ib, classIndex);
         ib.set(component, context.loadClass(context.constantString(classIndex)));
         createSingleArray(ib, context, component);
     }
@@ -73,10 +73,10 @@ public class NewArrayBranch extends InterpretBranch
         Local lengths = context.local("arrayLengths", "[I", InterpretContext.ARRAY_LENGTHS);
         Local index = context.intLocal("arrayIndex", InterpretContext.ARRAY_INDEX);
 
-        context.nextToken(ib, classIndex);
+        context.nextOperand(ib, classIndex);
         ib.set(component, context.loadClass(context.constantString(classIndex)));
 
-        context.nextToken(ib, dimensions);
+        context.nextOperand(ib, dimensions);
         ib.set(lengths, AdvInsnBuilder.newArray("I", dimensions));
         ib.set(index, AdvInsnBuilder.minus(dimensions, AdvInsnBuilder.constant(1)));
         ib.whileLoop(

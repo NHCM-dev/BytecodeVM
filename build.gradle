@@ -4,7 +4,6 @@ plugins {
 }
 
 group = 'BytecodeVM'
-version = '1.0.0'
 
 java {
     toolchain {

@@ -21,7 +21,7 @@ public class LoadLocalBranch extends InterpretBranch
     public void generate(AdvInsnBuilder ib, InterpretContext context, Opcs opcode)
     {
         Local localIndex = context.intLocal("localIndex", InterpretContext.RIGHT_VALUE);
-        context.nextToken(ib, localIndex);
+        context.nextOperand(ib, localIndex);
         if (opcode == Opcs.LLOAD || opcode == Opcs.DLOAD)
         {
             pushObjectWithWidth(ib, context, AdvInsnBuilder.arrayAt(context.locals(), localIndex), AdvInsnBuilder.constant(2));

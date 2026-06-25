@@ -39,7 +39,7 @@ public class InvokeNormalBranch extends InterpretBranch
                 "java/lang/invoke/MethodType",
                 readConstantString(ib, context)));
 
-        context.nextToken(ib, ignoredInterfaceFlag);
+        context.nextOperand(ib, ignoredInterfaceFlag);
 
         ib.set(arguments, AdvInsnBuilder.newArray(
                 "java/lang/Object",
@@ -142,7 +142,7 @@ public class InvokeNormalBranch extends InterpretBranch
     private static Expr readConstantString(AdvInsnBuilder ib, InterpretContext context)
     {
         Local token = context.intLocal("invokeToken", InterpretContext.JUMP_TARGET);
-        context.nextToken(ib, token);
+        context.nextOperand(ib, token);
         return context.constantString(token);
     }
 }

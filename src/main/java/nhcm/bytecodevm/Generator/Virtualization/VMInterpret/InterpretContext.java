@@ -44,6 +44,9 @@ public final class InterpretContext
     public static final int STACK_TYPE = 46;
     public static final int STACK_OBJECT = 47;
     public static final int INVOKE_RETURN_TYPE = 48;
+    public static final int INSTRUCTION_INDEX = 49;
+    public static final int ORIGINAL_PC = 50;
+    public static final int OPERAND_INDEX = 51;
     public static final int JUMP_TARGET = 9;
     public static final int SWITCH_KEY = 10;
     public static final int SWITCH_MIN = 11;
@@ -78,7 +81,10 @@ public final class InterpretContext
         this.frameClassName = frameClassName;
         this.programClassName = programClassName;
         this.frame = new MethodFrameLayout(frameClassName);
-        this.vm = new VMRuntimeLayout(vmClassName, "L" + frameClassName + ";");
+        this.vm = new VMRuntimeLayout(
+                vmClassName,
+                "L" + frameClassName + ";",
+                programClassName == null ? null : "L" + programClassName + ";");
         this.loopStart = loopStart;
     }
 
@@ -109,6 +115,21 @@ public final class InterpretContext
     public Local opcode()
     {
         return intLocal("opcode", OPCODE);
+    }
+
+    public Local instructionIndex()
+    {
+        return intLocal("instructionIndex", INSTRUCTION_INDEX);
+    }
+
+    public Local originalPc()
+    {
+        return intLocal("originalPc", ORIGINAL_PC);
+    }
+
+    public Local operandIndex()
+    {
+        return intLocal("operandIndex", OPERAND_INDEX);
     }
 
     public Local rightValue(NumericType type)
@@ -274,7 +295,19 @@ public final class InterpretContext
 
     public void nextToken(AdvInsnBuilder ib, Local target)
     {
-        ib.set(target, tokenAtProgramCounter());
-        ib.set(frameProgramCounter(), AdvInsnBuilder.plus(frameProgramCounter(), AdvInsnBuilder.constant(1)));
+        nextOperand(ib, target);
+    }
+
+    public void nextOperand(AdvInsnBuilder ib, Local target)
+    {
+        ib.set(target, AdvInsnBuilder.callStatic(
+                vm.owner,
+                vm.decodeOperand.name(),
+                "I",
+                program(),
+                instructionIndex(),
+                operandIndex(),
+                opcode()));
+        ib.increment(operandIndex(), 1);
     }
 }

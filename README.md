@@ -5,7 +5,9 @@
 BytecodeVM is a Java bytecode virtualizing obfuscator.
 It rewrites selected Java methods into a compact virtual bytecode program, injects a generated VM, and executes the protected logic through that VM at runtime.
 
-The project is still in progress, generated output should be tested carefully before being used in production.
+This obfuscator is used for demo only, not for production use. 
+It can make your program hundreds of times slower. 
+Its purpose is to demonstrate the concept of bytecode virtualization.
 
 ## Features
 

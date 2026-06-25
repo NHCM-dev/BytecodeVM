@@ -25,7 +25,7 @@ public class PushIntBranch extends InterpretBranch
         if (opcode.hasOperand)
         {
             Local value = context.intLocal("intConstant", InterpretContext.RIGHT_VALUE);
-            context.nextToken(ib, value);
+            context.nextOperand(ib, value);
             pushNumber(ib, context, NumericType.INT, value);
             return;
         }

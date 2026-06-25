@@ -21,6 +21,16 @@ public class BytecodeVMConfig
     public final MutateMode mutateMode;
     public final RenameMode renameMode;
     public final InterpretMode interpretMode;
+    public final boolean protectCodePool;
+    public final boolean virtualizeInstructionAddresses;
+    public final boolean encryptOperands;
+    public final boolean perMethodOpcodeMap;
+    public final boolean shuffleConstants;
+    public final boolean bindConstantsToOperands;
+    public final boolean splitCodeStreams;
+    public final boolean shuffleInstructionBlocks;
+    public final boolean obfuscateDispatch;
+    public final boolean dynamicCodePoolBuild;
     public final String[] includes;
     public final String[] exclusions;
 
@@ -83,8 +93,28 @@ public class BytecodeVMConfig
                 .mutateMode(MutateMode.valueOf(requiredString(json, "mutateMode")))
                 .interpretMode(InterpretMode.valueOf(requiredString(json, "interpretMode")))
                 .renameMode(RenameMode.valueOf(requiredString(json, "renameMode")))
+                .protectCodePool(optionalBoolean(json, "protectCodePool", true))
+                .virtualizeInstructionAddresses(optionalBoolean(json, "virtualizeInstructionAddresses", true))
+                .encryptOperands(optionalBoolean(json, "encryptOperands", true))
+                .perMethodOpcodeMap(optionalBoolean(json, "perMethodOpcodeMap", true))
+                .shuffleConstants(optionalBoolean(json, "shuffleConstants", true))
+                .bindConstantsToOperands(optionalBoolean(json, "bindConstantsToOperands", true))
+                .splitCodeStreams(optionalBoolean(json, "splitCodeStreams", true))
+                .shuffleInstructionBlocks(optionalBoolean(json, "shuffleInstructionBlocks", true))
+                .obfuscateDispatch(optionalBoolean(json, "obfuscateDispatch", true))
+                .dynamicCodePoolBuild(optionalBoolean(json, "dynamicCodePoolBuild", true))
                 .includes(includes)
                 .exclusions(exclusions).build();
+    }
+
+    private static boolean optionalBoolean(JsonObject json, String key, boolean defaultValue)
+    {
+        JsonElement value = json.get(key);
+        if(value == null || value.isJsonNull())
+        {
+            return defaultValue;
+        }
+        return value.getAsBoolean();
     }
 
     private static String requiredString(JsonObject json, String key)

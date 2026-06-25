@@ -16,6 +16,11 @@ public class VMRuntimeLayout
     public final MethodRef constantString;
     public final MethodRef resolve;
     public final MethodRef interpret;
+    public final MethodRef instructionIndex;
+    public final MethodRef decodeOpcode;
+    public final MethodRef decodeNextPc;
+    public final MethodRef decodeOriginalPc;
+    public final MethodRef decodeOperand;
     public final MethodRef methodType;
     public final MethodRef resolveConstant;
     public final MethodRef loadOwner;
@@ -57,6 +62,11 @@ public class VMRuntimeLayout
         this.constantString = method("constantString", "([Ljava/lang/Object;I)Ljava/lang/String;");
         this.resolve = programDescriptor == null ? null : method("resolve", "(I)" + programDescriptor);
         this.interpret = programDescriptor == null ? null : method("interpret", "(" + programDescriptor + frameDescriptor + ")V");
+        this.instructionIndex = programDescriptor == null ? null : method("instructionIndex", "(" + programDescriptor + "I)I");
+        this.decodeOpcode = programDescriptor == null ? null : method("decodeOpcode", "(" + programDescriptor + "I)I");
+        this.decodeNextPc = programDescriptor == null ? null : method("decodeNextPc", "(" + programDescriptor + "I)I");
+        this.decodeOriginalPc = programDescriptor == null ? null : method("decodeOriginalPc", "(" + programDescriptor + "I)I");
+        this.decodeOperand = programDescriptor == null ? null : method("decodeOperand", "(" + programDescriptor + "III)I");
         this.methodType = method("methodType", "(Ljava/lang/String;)Ljava/lang/invoke/MethodType;");
         this.resolveConstant = method("resolveConstant", "(Ljava/lang/Object;" + frameDescriptor + ")Ljava/lang/Object;");
         this.loadOwner = method("loadOwner", "(Ljava/lang/String;)Ljava/lang/Class;");
@@ -101,7 +111,7 @@ public class VMRuntimeLayout
         this.cloneArray = method("cloneArray", "(Ljava/lang/Object;)Ljava/lang/Object;");
         this.findExceptionHandler = method(
                 "findExceptionHandler",
-                "(Ljava/lang/Throwable;[II[Ljava/lang/Object;)I");
+                "(Ljava/lang/Throwable;[III[Ljava/lang/Object;)I");
         this.monitorFor = method(
                 "monitorFor",
                 "(Ljava/lang/Object;)Ljava/util/concurrent/locks/ReentrantLock;");

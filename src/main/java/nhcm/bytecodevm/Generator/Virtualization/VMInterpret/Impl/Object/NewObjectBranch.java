@@ -22,7 +22,7 @@ public class NewObjectBranch extends InterpretBranch
         var classIndex = context.intLocal("classIndex", InterpretContext.JUMP_TARGET);
         var marker = context.local("identityMarker", "[Ljava/lang/Object;", InterpretContext.FIELD_VALUE);
 
-        context.nextToken(ib, classIndex);
+        context.nextOperand(ib, classIndex);
         ib.set(marker, AdvInsnBuilder.newArray("java/lang/Object", AdvInsnBuilder.constant(1)));
         ib.setArray(marker, AdvInsnBuilder.constant(0), AdvInsnBuilder.arrayAt(context.constants(), classIndex));
         pushObject(ib, context, marker);

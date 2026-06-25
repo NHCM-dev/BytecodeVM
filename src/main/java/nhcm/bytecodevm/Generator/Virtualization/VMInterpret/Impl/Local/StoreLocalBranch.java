@@ -22,7 +22,7 @@ public class StoreLocalBranch extends InterpretBranch
     {
         Local localIndex = context.intLocal("localIndex", InterpretContext.RIGHT_VALUE);
         Local value = context.objectLocal("localValue", InterpretContext.LEFT_VALUE);
-        context.nextToken(ib, localIndex);
+        context.nextOperand(ib, localIndex);
         popObject(ib, context, value);
         ib.setArray(context.locals(), localIndex, value);
     }

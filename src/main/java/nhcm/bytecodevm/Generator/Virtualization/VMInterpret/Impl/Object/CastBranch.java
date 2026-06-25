@@ -21,7 +21,7 @@ public class CastBranch extends InterpretBranch
     {
         var classIndex = context.intLocal("classIndex", InterpretContext.JUMP_TARGET);
         var targetClass = context.local("targetClass", "java/lang/Class", InterpretContext.FIELD_VALUE);
-        context.nextToken(ib, classIndex);
+        context.nextOperand(ib, classIndex);
         ib.set(targetClass, context.loadClass(context.constantString(classIndex)));
 
         popObject(ib, context);

@@ -60,7 +60,7 @@ public class ReadFieldBranch extends InterpretBranch
     private static Expr readConstantString(AdvInsnBuilder ib, InterpretContext context)
     {
         Local token = context.intLocal("fieldToken", InterpretContext.JUMP_TARGET);
-        context.nextToken(ib, token);
+        context.nextOperand(ib, token);
         return context.constantString(token);
     }
 

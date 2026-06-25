@@ -23,7 +23,7 @@ public class FlowBranch extends InterpretBranch
     public void generate(AdvInsnBuilder ib, InterpretContext context, Opcs opcode)
     {
         var jumpTarget = context.intLocal("jumpTarget", InterpretContext.JUMP_TARGET);
-        context.nextToken(ib, jumpTarget);
+        context.nextOperand(ib, jumpTarget);
 
         Condition condition = switch (opcode)
         {

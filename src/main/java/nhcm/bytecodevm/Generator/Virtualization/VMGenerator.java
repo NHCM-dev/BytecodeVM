@@ -153,6 +153,7 @@ public class VMGenerator extends ClassObj
     private final VMProgramLayout programLayout;
     private final VMRuntimeLayout vmLayout;
     private final BytecodeVMConfig config;
+    private final int dispatchSalt;
 
     public VMGenerator(
             String className,
@@ -173,6 +174,7 @@ public class VMGenerator extends ClassObj
         this.programLayout = vmProgramGenerator.getLayout();
         this.vmLayout = new VMRuntimeLayout(className, methodFrameGenerator.descriptor(), vmProgramGenerator.descriptor());
         this.config = config;
+        this.dispatchSalt = nhcm.bytecodevm.Utils.RandomUtils.randomInt();
         ClassNode cn = ClassUtils.newClassNode(new Acc[]{Acc.PUBLIC, Acc.FINAL}, className);
         InsnUtils.addPrivateInit(cn);
         this.classNode = cn;
@@ -185,6 +187,15 @@ public class VMGenerator extends ClassObj
         cn.methods.add(genClInitMethod(codePoolGenerators));
         cn.methods.add(genExecuteMethod());
         cn.methods.add(genInterpretMethod());
+        cn.methods.add(genInstructionIndexMethod());
+        cn.methods.add(genDecodeOpcodeMethod());
+        cn.methods.add(genDecodeNextPcMethod());
+        cn.methods.add(genDecodeOriginalPcMethod());
+        cn.methods.add(genDecodeOperandMethod());
+        cn.methods.add(genMixMethod());
+        cn.methods.add(genLayoutValueMethod());
+        cn.methods.add(genDispatchKeyMethod());
+        cn.methods.add(genDecodeMaybeStringMethod());
         cn.methods.add(genResolveMethod());
         cn.methods.add(genConstantStringMethod());
         cn.methods.add(genMethodTypeMethod());
@@ -233,11 +244,11 @@ public class VMGenerator extends ClassObj
                 programLayout.owner,
                 loopStart);
 
-        // int[] code = program.code();
+        // int[] code = program.opcodeStream();
         ib.set(context.code(), AdvInsnBuilder.callVirtual(
                 context.program(),
                 programLayout.owner,
-                programLayout.code.name(),
+                programLayout.opcodeStream.name(),
                 "[I"));
         // Object[] constants = program.constants();
         ib.set(context.constants(), AdvInsnBuilder.callVirtual(
@@ -258,10 +269,34 @@ public class VMGenerator extends ClassObj
 
         // int instructionPc = frame.programCounter;
         ib.set(context.instructionPc(), context.frameProgramCounter());
+        ib.set(context.originalPc(), context.instructionPc());
 
-        // int opcode = code[frame.programCounter++];
         ib.mark(tryStart, "tryStart");
-        context.nextToken(ib, context.opcode());
+        ib.set(context.instructionIndex(), AdvInsnBuilder.callStatic(
+                vmLayout.owner,
+                vmLayout.instructionIndex.name(),
+                "I",
+                context.program(),
+                context.instructionPc()));
+        ib.set(context.operandIndex(), AdvInsnBuilder.constant(0));
+        ib.set(context.opcode(), AdvInsnBuilder.callStatic(
+                vmLayout.owner,
+                vmLayout.decodeOpcode.name(),
+                "I",
+                context.program(),
+                context.instructionIndex()));
+        ib.set(context.frameProgramCounter(), AdvInsnBuilder.callStatic(
+                vmLayout.owner,
+                vmLayout.decodeNextPc.name(),
+                "I",
+                context.program(),
+                context.instructionIndex()));
+        ib.set(context.originalPc(), AdvInsnBuilder.callStatic(
+                vmLayout.owner,
+                vmLayout.decodeOriginalPc.name(),
+                "I",
+                context.program(),
+                context.instructionIndex()));
 
         generateDispatch(
                 ib,
@@ -281,9 +316,10 @@ public class VMGenerator extends ClassObj
                 "I",
                 context.thrown(),
                 context.exceptionHandlers(),
-                context.instructionPc(),
+                context.originalPc(),
+                AdvInsnBuilder.callVirtual(context.program(), programLayout.owner, programLayout.methodKey.name(), "I"),
                 context.constants()));
-        ib.ifCondition(AdvInsnBuilder.lessThan(context.handlerPc(), AdvInsnBuilder.constant(0)), b -> b.gotoLabel(noHandler));
+        ib.ifCondition(AdvInsnBuilder.equal(context.handlerPc(), AdvInsnBuilder.constant(-1)), b -> b.gotoLabel(noHandler));
         ib.set(context.frameField(frameLayout.stackPointer), AdvInsnBuilder.constant(0));
         ib.directCall(AdvInsnBuilder.callVirtual(
                 context.frame(),
@@ -305,6 +341,244 @@ public class VMGenerator extends ClassObj
         ib.returnVoid();
 
         return methodNode;
+    }
+
+    private MethodNode genInstructionIndexMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(new Acc[]{Acc.PRIVATE, Acc.STATIC}, vmLayout.instructionIndex.name(), vmLayout.instructionIndex.descriptor());
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local program = ib.getLocal("program", programLayout.owner, 0);
+        Local pc = ib.getLocal("pc", "I", 1);
+        Local index = ib.getLocal("index", "I", 2);
+        Local count = ib.getLocal("count", "I", 3);
+
+        ib.set(count, AdvInsnBuilder.divide(
+                AdvInsnBuilder.arrayLength(callProgramArray(program, programLayout.layoutStream.name())),
+                AdvInsnBuilder.constant(ProtectedVMMethod.RECORD_SIZE)));
+        ib.forLoop(
+                b -> b.set(index, AdvInsnBuilder.constant(0)),
+                AdvInsnBuilder.lessThan(index, count),
+                b -> b.increment(index, 1),
+                b -> b.ifCondition(
+                        AdvInsnBuilder.equal(
+                                layoutValue(program, index, AdvInsnBuilder.constant(ProtectedVMMethod.LAYOUT_PC)),
+                                pc),
+                        found -> found.returnValue(index)));
+        ib.forLoop(
+                b -> b.set(index, AdvInsnBuilder.constant(0)),
+                AdvInsnBuilder.lessThan(index, count),
+                b -> b.increment(index, 1),
+                b -> b.ifCondition(
+                        AdvInsnBuilder.equal(
+                                layoutValue(program, index, AdvInsnBuilder.constant(ProtectedVMMethod.LAYOUT_ORIGINAL_PC)),
+                                pc),
+                        found -> found.returnValue(index)));
+        ib.throwValue(AdvInsnBuilder.newObject(
+                "java/lang/IllegalStateException",
+                stringConcat(AdvInsnBuilder.constant("Unknown VM pc "), pc)));
+        return method;
+    }
+
+    private MethodNode genDecodeOpcodeMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(new Acc[]{Acc.PRIVATE, Acc.STATIC}, vmLayout.decodeOpcode.name(), vmLayout.decodeOpcode.descriptor());
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local program = ib.getLocal("program", programLayout.owner, 0);
+        Local index = ib.getLocal("instructionIndex", "I", 1);
+        Local key = ib.getLocal("methodKey", "I", 2);
+        Local virtualPc = ib.getLocal("virtualPc", "I", 3);
+        Local virtualOpcode = ib.getLocal("virtualOpcode", "I", 4);
+        Local mappedOpcode = ib.getLocal("mappedOpcode", "I", 5);
+
+        ib.set(key, callProgramInt(program, programLayout.methodKey.name()));
+        ib.set(virtualPc, layoutValue(program, index, AdvInsnBuilder.constant(ProtectedVMMethod.LAYOUT_PC)));
+        ib.set(virtualOpcode, AdvInsnBuilder.arrayAt(callProgramArray(program, programLayout.opcodeStream.name()), index));
+        if (config.perMethodOpcodeMap)
+        {
+            ib.ifCondition(
+                    AdvInsnBuilder.notEqual(key, AdvInsnBuilder.constant(0)),
+                    b -> b.set(virtualOpcode, AdvInsnBuilder.bitXor(virtualOpcode, mixCall(key, virtualPc, index, AdvInsnBuilder.constant(ProtectedVMMethod.SALT_OPCODE)))));
+        }
+        ib.set(mappedOpcode, AdvInsnBuilder.arrayAt(callProgramArray(program, programLayout.opcodeMap.name()), virtualOpcode));
+        if (config.perMethodOpcodeMap)
+        {
+            ib.ifCondition(
+                    AdvInsnBuilder.notEqual(key, AdvInsnBuilder.constant(0)),
+                    b -> b.set(mappedOpcode, AdvInsnBuilder.bitXor(mappedOpcode, mixCall(key, virtualOpcode, AdvInsnBuilder.constant(ProtectedVMMethod.SALT_OPCODE_MAP), AdvInsnBuilder.constant(0)))));
+        }
+        ib.returnValue(mappedOpcode);
+        return method;
+    }
+
+    private MethodNode genDecodeNextPcMethod()
+    {
+        return genDecodeLayoutFieldMethod(vmLayout.decodeNextPc.name(), vmLayout.decodeNextPc.descriptor(), ProtectedVMMethod.LAYOUT_NEXT_PC);
+    }
+
+    private MethodNode genDecodeOriginalPcMethod()
+    {
+        return genDecodeLayoutFieldMethod(vmLayout.decodeOriginalPc.name(), vmLayout.decodeOriginalPc.descriptor(), ProtectedVMMethod.LAYOUT_ORIGINAL_PC);
+    }
+
+    private MethodNode genDecodeLayoutFieldMethod(String name, String descriptor, int field)
+    {
+        MethodNode method = MethodUtils.newMethodNode(new Acc[]{Acc.PRIVATE, Acc.STATIC}, name, descriptor);
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local program = ib.getLocal("program", programLayout.owner, 0);
+        Local index = ib.getLocal("instructionIndex", "I", 1);
+        ib.returnValue(layoutValue(program, index, AdvInsnBuilder.constant(field)));
+        return method;
+    }
+
+    private MethodNode genDecodeOperandMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(new Acc[]{Acc.PRIVATE, Acc.STATIC}, vmLayout.decodeOperand.name(), vmLayout.decodeOperand.descriptor());
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local program = ib.getLocal("program", programLayout.owner, 0);
+        Local instructionIndex = ib.getLocal("instructionIndex", "I", 1);
+        Local operandIndex = ib.getLocal("operandIndex", "I", 2);
+        Local opcode = ib.getLocal("opcode", "I", 3);
+        Local key = ib.getLocal("methodKey", "I", 4);
+        Local virtualPc = ib.getLocal("virtualPc", "I", 5);
+        Local operandStart = ib.getLocal("operandStart", "I", 6);
+        Local operandCount = ib.getLocal("operandCount", "I", 7);
+        Local operandPosition = ib.getLocal("operandPosition", "I", 8);
+        Local constantMask = ib.getLocal("constantMask", "I", 9);
+        Local value = ib.getLocal("value", "I", 10);
+
+        ib.set(key, callProgramInt(program, programLayout.methodKey.name()));
+        ib.set(virtualPc, layoutValue(program, instructionIndex, AdvInsnBuilder.constant(ProtectedVMMethod.LAYOUT_PC)));
+        ib.set(operandStart, layoutValue(program, instructionIndex, AdvInsnBuilder.constant(ProtectedVMMethod.LAYOUT_OPERAND_START)));
+        ib.set(operandCount, layoutValue(program, instructionIndex, AdvInsnBuilder.constant(ProtectedVMMethod.LAYOUT_OPERAND_COUNT)));
+        ib.ifCondition(
+                AdvInsnBuilder.greaterOrEqual(operandIndex, operandCount),
+                b -> b.throwValue(AdvInsnBuilder.newObject(
+                        "java/lang/IllegalStateException",
+                        stringConcat(AdvInsnBuilder.constant("Operand out of range "), operandIndex))));
+        ib.set(operandPosition, AdvInsnBuilder.plus(operandStart, operandIndex));
+        ib.set(value, AdvInsnBuilder.arrayAt(callProgramArray(program, programLayout.operandStream.name()), operandPosition));
+        if (config.encryptOperands || config.bindConstantsToOperands)
+        {
+            ib.ifCondition(
+                    AdvInsnBuilder.notEqual(key, AdvInsnBuilder.constant(0)),
+                    b -> {
+                        if (config.encryptOperands)
+                        {
+                            b.set(value, AdvInsnBuilder.bitXor(
+                                    value,
+                                    mixCall(
+                                            AdvInsnBuilder.bitXor(key, opcode),
+                                            virtualPc,
+                                            operandIndex,
+                                            AdvInsnBuilder.bitXor(AdvInsnBuilder.constant(ProtectedVMMethod.SALT_OPERAND), operandPosition))));
+                        }
+                        if (config.bindConstantsToOperands)
+                        {
+                            b.set(constantMask, layoutValue(program, instructionIndex, AdvInsnBuilder.constant(ProtectedVMMethod.LAYOUT_CONSTANT_MASK)));
+                            b.ifCondition(
+                                    AdvInsnBuilder.notEqual(
+                                            AdvInsnBuilder.bitAnd(constantMask, AdvInsnBuilder.shiftLeft(AdvInsnBuilder.constant(1), operandIndex)),
+                                            AdvInsnBuilder.constant(0)),
+                                    constant -> constant.set(value, AdvInsnBuilder.bitXor(
+                                            value,
+                                            mixCall(
+                                                    AdvInsnBuilder.bitXor(key, opcode),
+                                                    virtualPc,
+                                                    operandIndex,
+                                                    AdvInsnBuilder.constant(ProtectedVMMethod.SALT_CONSTANT)))));
+                        }
+                    });
+        }
+        ib.returnValue(value);
+        return method;
+    }
+
+    private MethodNode genLayoutValueMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(new Acc[]{Acc.PRIVATE, Acc.STATIC}, "layoutValue", "(" + vmProgramGenerator.descriptor() + "II)I");
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local program = ib.getLocal("program", programLayout.owner, 0);
+        Local instructionIndex = ib.getLocal("instructionIndex", "I", 1);
+        Local field = ib.getLocal("field", "I", 2);
+        Local key = ib.getLocal("methodKey", "I", 3);
+        Local raw = ib.getLocal("raw", "I", 4);
+
+        ib.set(key, callProgramInt(program, programLayout.methodKey.name()));
+        ib.set(raw, AdvInsnBuilder.arrayAt(
+                callProgramArray(program, programLayout.layoutStream.name()),
+                AdvInsnBuilder.plus(
+                        AdvInsnBuilder.multiply(instructionIndex, AdvInsnBuilder.constant(ProtectedVMMethod.RECORD_SIZE)),
+                        field)));
+        ib.ifCondition(AdvInsnBuilder.equal(key, AdvInsnBuilder.constant(0)), b -> b.returnValue(raw));
+        ib.returnValue(AdvInsnBuilder.bitXor(raw, mixCall(key, instructionIndex, field, AdvInsnBuilder.constant(ProtectedVMMethod.SALT_LAYOUT))));
+        return method;
+    }
+
+    private MethodNode genMixMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(new Acc[]{Acc.PRIVATE, Acc.STATIC}, "mix", "(IIII)I");
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local key = ib.getLocal("key", "I", 0);
+        Local a = ib.getLocal("a", "I", 1);
+        Local b = ib.getLocal("b", "I", 2);
+        Local c = ib.getLocal("c", "I", 3);
+        Local x = ib.getLocal("x", "I", 4);
+        ib.set(x, AdvInsnBuilder.bitXor(key, AdvInsnBuilder.constant(0x9e3779b9)));
+        mixRound(ib, x, a, 0x7f4a7c15);
+        mixRound(ib, x, b, 0x94d049bb);
+        mixRound(ib, x, c, 0x2545f491);
+        ib.set(x, AdvInsnBuilder.bitXor(x, AdvInsnBuilder.unsignedShiftRight(x, AdvInsnBuilder.constant(16))));
+        ib.set(x, AdvInsnBuilder.multiply(x, AdvInsnBuilder.constant(0x7feb352d)));
+        ib.set(x, AdvInsnBuilder.bitXor(x, AdvInsnBuilder.unsignedShiftRight(x, AdvInsnBuilder.constant(15))));
+        ib.set(x, AdvInsnBuilder.multiply(x, AdvInsnBuilder.constant(0x846ca68b)));
+        ib.set(x, AdvInsnBuilder.bitXor(x, AdvInsnBuilder.unsignedShiftRight(x, AdvInsnBuilder.constant(16))));
+        ib.returnValue(x);
+        return method;
+    }
+
+    private MethodNode genDispatchKeyMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(new Acc[]{Acc.PRIVATE, Acc.STATIC}, "dispatchKey", "(I)I");
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local opcode = ib.getLocal("opcode", "I", 0);
+        ib.returnValue(dispatchKeyExpr(opcode));
+        return method;
+    }
+
+    private MethodNode genDecodeMaybeStringMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(new Acc[]{Acc.PRIVATE, Acc.STATIC}, "decodeMaybeString", "(Ljava/lang/Object;)Ljava/lang/String;");
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local value = ib.getLocal("value", "java/lang/Object", 0);
+        Local encoded = ib.getLocal("encoded", "[Ljava/lang/Object;", 1);
+        Local chars = ib.getLocal("chars", "[I", 2);
+        Local key = ib.getLocal("key", "I", 3);
+        Local decoded = ib.getLocal("decoded", "[C", 4);
+        Local index = ib.getLocal("index", "I", 5);
+
+        ib.ifCondition(AdvInsnBuilder.isInstanceOf(value, "java/lang/String"), b -> b.returnValue(AdvInsnBuilder.cast(value, "java/lang/String")));
+        ib.ifCondition(AdvInsnBuilder.not(AdvInsnBuilder.isInstanceOf(value, "[Ljava/lang/Object;")), b -> b.returnValue(AdvInsnBuilder.cast(value, "java/lang/String")));
+        ib.set(encoded, AdvInsnBuilder.cast(value, "[Ljava/lang/Object;"));
+        ib.ifCondition(AdvInsnBuilder.notEqual(AdvInsnBuilder.arrayLength(encoded), AdvInsnBuilder.constant(2)), b -> b.returnValue(AdvInsnBuilder.cast(value, "java/lang/String")));
+        ib.ifCondition(AdvInsnBuilder.not(AdvInsnBuilder.isInstanceOf(AdvInsnBuilder.arrayAt(encoded, AdvInsnBuilder.constant(0)), "[I")), b -> b.returnValue(AdvInsnBuilder.cast(value, "java/lang/String")));
+        ib.ifCondition(AdvInsnBuilder.not(AdvInsnBuilder.isInstanceOf(AdvInsnBuilder.arrayAt(encoded, AdvInsnBuilder.constant(1)), "java/lang/Integer")), b -> b.returnValue(AdvInsnBuilder.cast(value, "java/lang/String")));
+        ib.set(chars, AdvInsnBuilder.cast(AdvInsnBuilder.arrayAt(encoded, AdvInsnBuilder.constant(0)), "[I"));
+        ib.set(key, AdvInsnBuilder.unbox(AdvInsnBuilder.arrayAt(encoded, AdvInsnBuilder.constant(1)), "I"));
+        ib.set(decoded, AdvInsnBuilder.newArray("char", AdvInsnBuilder.arrayLength(chars)));
+        ib.forLoop(
+                b -> b.set(index, AdvInsnBuilder.constant(0)),
+                AdvInsnBuilder.lessThan(index, AdvInsnBuilder.arrayLength(chars)),
+                b -> b.increment(index, 1),
+                b -> b.setArray(
+                        decoded,
+                        index,
+                        AdvInsnBuilder.cast(
+                                AdvInsnBuilder.bitXor(
+                                        AdvInsnBuilder.arrayAt(chars, index),
+                                        mixCall(key, index, AdvInsnBuilder.constant(ProtectedVMMethod.SALT_STRING), AdvInsnBuilder.constant(0))),
+                                "C")));
+        ib.returnValue(AdvInsnBuilder.newObject("java/lang/String", decoded));
+        return method;
     }
 
     private void generateDispatch(AdvInsnBuilder ib, LabelNode loopStart, LabelNode unknownOpcode)
@@ -351,7 +625,11 @@ public class VMGenerator extends ClassObj
         {
             int chunkIndex = i / INTERPRET_CHUNK_SIZE;
             int opcodeIndex = i % INTERPRET_CHUNK_SIZE;
-            cases[i] = AdvInsnBuilder.switchCase(opcMutator.toMutated(opcodes.get(i)), b -> {
+            int mutatedOpcode = opcMutator.toMutated(opcodes.get(i));
+            int dispatchKey = config.obfuscateDispatch
+                    ? dispatchKey(mutatedOpcode)
+                    : mutatedOpcode;
+            cases[i] = AdvInsnBuilder.switchCase(dispatchKey, b -> {
                 b.directCall(AdvInsnBuilder.callStatic(
                         className(),
                         interpretChunkName(chunkIndex),
@@ -361,11 +639,15 @@ public class VMGenerator extends ClassObj
                         context.code(),
                         context.constants(),
                         context.opcode(),
-                        AdvInsnBuilder.constant(opcodeIndex)));
+                        AdvInsnBuilder.constant(opcodeIndex),
+                        context.instructionIndex()));
                 b.gotoLabel(loopStart);
             });
         }
-        ib.switchLookup(context.opcode(), b -> b.gotoLabel(unknownOpcode), cases);
+        Expr selector = config.obfuscateDispatch
+                ? AdvInsnBuilder.callStatic(className(), "dispatchKey", "I", context.opcode())
+                : context.opcode();
+        ib.switchLookup(selector, b -> b.gotoLabel(unknownOpcode), cases);
     }
 
     private MethodNode genInterpretChunkMethod(int chunkIndex, List<Opcs> opcodes)
@@ -376,11 +658,14 @@ public class VMGenerator extends ClassObj
                 interpretChunkDescriptor());
         AdvInsnBuilder ib = new AdvInsnBuilder(method);
         Local opcodeIndex = ib.getLocal("opcodeIndex", "I", InterpretContext.RIGHT_VALUE);
+        Local passedInstructionIndex = ib.getLocal("passedInstructionIndex", "I", 6);
         InterpretContext context = new InterpretContext(
                 className(),
                 frameLayout.owner,
                 programLayout.owner,
                 null);
+        ib.set(context.instructionIndex(), passedInstructionIndex);
+        ib.set(context.operandIndex(), AdvInsnBuilder.constant(0));
         @SuppressWarnings("unchecked")
         java.util.function.Consumer<AdvInsnBuilder>[] cases = new java.util.function.Consumer[opcodes.size()];
         for (int i = 0; i < opcodes.size(); i++)
@@ -421,7 +706,7 @@ public class VMGenerator extends ClassObj
         return "(" +
                 vmProgramGenerator.descriptor() +
                 methodFrameGenerator.descriptor() +
-                "[I[Ljava/lang/Object;II)V";
+                "[I[Ljava/lang/Object;III)V";
     }
 
     private void generateUnknownOpcode(AdvInsnBuilder ib)
@@ -571,7 +856,7 @@ public class VMGenerator extends ClassObj
         AdvInsnBuilder ib = new AdvInsnBuilder(method);
         Local constants = ib.getLocal("constants", "[Ljava/lang/Object;", 0);
         Local index = ib.getLocal("index", "I", 1);
-        ib.returnValue(AdvInsnBuilder.cast(AdvInsnBuilder.arrayAt(constants, index), "java/lang/String"));
+        ib.returnValue(decodeMaybeString(AdvInsnBuilder.arrayAt(constants, index)));
         return method;
     }
 
@@ -616,23 +901,37 @@ public class VMGenerator extends ClassObj
         Local descriptor = ib.getLocal("descriptor", "java/lang/String", 3);
         Local loader = ib.getLocal("loader", "java/lang/ClassLoader", 4);
         Local receiver = ib.getLocal("receiver", "java/lang/Object", 5);
+        Local marker = ib.getLocal("marker", "java/lang/String", 6);
 
         ib.ifCondition(AdvInsnBuilder.not(AdvInsnBuilder.isInstanceOf(value, "[Ljava/lang/Object;")), b -> b.returnValue(value));
         ib.set(encoded, AdvInsnBuilder.cast(value, "[Ljava/lang/Object;"));
         ib.ifCondition(AdvInsnBuilder.notEqual(AdvInsnBuilder.arrayLength(encoded), AdvInsnBuilder.constant(2)), b -> b.returnValue(value));
+        ib.ifCondition(
+                AdvInsnBuilder.and(
+                        AdvInsnBuilder.isInstanceOf(AdvInsnBuilder.arrayAt(encoded, AdvInsnBuilder.constant(0)), "[I"),
+                        AdvInsnBuilder.isInstanceOf(AdvInsnBuilder.arrayAt(encoded, AdvInsnBuilder.constant(1)), "java/lang/Integer")),
+                b -> b.returnValue(decodeMaybeString(value)));
+        ib.ifCondition(
+                AdvInsnBuilder.and(
+                        AdvInsnBuilder.not(AdvInsnBuilder.isInstanceOf(AdvInsnBuilder.arrayAt(encoded, AdvInsnBuilder.constant(0)), "java/lang/String")),
+                        AdvInsnBuilder.not(AdvInsnBuilder.isInstanceOf(AdvInsnBuilder.arrayAt(encoded, AdvInsnBuilder.constant(0)), "[Ljava/lang/Object;"))),
+                b -> b.returnValue(value));
+        ib.set(marker, decodeMaybeString(AdvInsnBuilder.arrayAt(encoded, AdvInsnBuilder.constant(0))));
         ib.ifCondition(
                 AdvInsnBuilder.isFalse(AdvInsnBuilder.callVirtual(
                         AdvInsnBuilder.constant("__BytecodeVM_TYPE__"),
                         "java/lang/String",
                         "equals",
                         "Z",
-                        AdvInsnBuilder.arrayAt(encoded, AdvInsnBuilder.constant(0)))),
+                        AdvInsnBuilder.cast(marker, "java/lang/Object"))),
                 b -> b.returnValue(value));
         ib.ifCondition(
-                AdvInsnBuilder.not(AdvInsnBuilder.isInstanceOf(AdvInsnBuilder.arrayAt(encoded, AdvInsnBuilder.constant(1)), "java/lang/String")),
+                AdvInsnBuilder.and(
+                        AdvInsnBuilder.not(AdvInsnBuilder.isInstanceOf(AdvInsnBuilder.arrayAt(encoded, AdvInsnBuilder.constant(1)), "java/lang/String")),
+                        AdvInsnBuilder.not(AdvInsnBuilder.isInstanceOf(AdvInsnBuilder.arrayAt(encoded, AdvInsnBuilder.constant(1)), "[Ljava/lang/Object;"))),
                 b -> b.returnValue(value));
 
-        ib.set(descriptor, AdvInsnBuilder.cast(AdvInsnBuilder.arrayAt(encoded, AdvInsnBuilder.constant(1)), "java/lang/String"));
+        ib.set(descriptor, decodeMaybeString(AdvInsnBuilder.arrayAt(encoded, AdvInsnBuilder.constant(1))));
         ib.set(loader, AdvInsnBuilder.callVirtual(
                 AdvInsnBuilder.constant(org.objectweb.asm.Type.getObjectType(className())),
                 "java/lang/Class",
@@ -681,30 +980,44 @@ public class VMGenerator extends ClassObj
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
-                "findExceptionHandler",
-                "(Ljava/lang/Throwable;[II[Ljava/lang/Object;)I");
+                vmLayout.findExceptionHandler.name(),
+                vmLayout.findExceptionHandler.descriptor());
         AdvInsnBuilder ib = new AdvInsnBuilder(method);
         Local throwable = ib.getLocal("throwable", "java/lang/Throwable", 0);
         Local handlers = ib.getLocal("handlers", "[I", 1);
         Local instructionPc = ib.getLocal("instructionPc", "I", 2);
-        Local constants = ib.getLocal("constants", "[Ljava/lang/Object;", 3);
-        Local index = ib.getLocal("index", "I", 4);
-        Local typeIndex = ib.getLocal("typeIndex", "I", 5);
+        Local methodKey = ib.getLocal("methodKey", "I", 3);
+        Local constants = ib.getLocal("constants", "[Ljava/lang/Object;", 4);
+        Local index = ib.getLocal("index", "I", 5);
+        Local handlerSlot = ib.getLocal("handlerSlot", "I", 6);
+        Local startPc = ib.getLocal("startPc", "I", 7);
+        Local endPc = ib.getLocal("endPc", "I", 8);
+        Local handlerPc = ib.getLocal("handlerPc", "I", 9);
+        Local typeIndex = ib.getLocal("typeIndex", "I", 10);
 
         ib.forLoop(
                 b -> b.set(index, AdvInsnBuilder.constant(0)),
                 AdvInsnBuilder.lessThan(index, AdvInsnBuilder.arrayLength(handlers)),
                 b -> b.increment(index, 4),
                 b -> {
-                    Expr startPc = AdvInsnBuilder.arrayAt(handlers, index);
-                    Expr endPc = AdvInsnBuilder.arrayAt(handlers, AdvInsnBuilder.plus(index, AdvInsnBuilder.constant(1)));
-                    Expr handlerPc = AdvInsnBuilder.arrayAt(handlers, AdvInsnBuilder.plus(index, AdvInsnBuilder.constant(2)));
+                    b.set(handlerSlot, AdvInsnBuilder.divide(index, AdvInsnBuilder.constant(ProtectedVMMethod.HANDLER_SIZE)));
+                    b.set(startPc, AdvInsnBuilder.arrayAt(handlers, index));
+                    b.set(endPc, AdvInsnBuilder.arrayAt(handlers, AdvInsnBuilder.plus(index, AdvInsnBuilder.constant(1))));
+                    b.set(handlerPc, AdvInsnBuilder.arrayAt(handlers, AdvInsnBuilder.plus(index, AdvInsnBuilder.constant(2))));
+                    b.set(typeIndex, AdvInsnBuilder.arrayAt(handlers, AdvInsnBuilder.plus(index, AdvInsnBuilder.constant(3))));
+                    b.ifCondition(
+                            AdvInsnBuilder.notEqual(methodKey, AdvInsnBuilder.constant(0)),
+                            decode -> {
+                                decode.set(startPc, AdvInsnBuilder.bitXor(startPc, handlerMixCall(methodKey, handlerSlot, 0)));
+                                decode.set(endPc, AdvInsnBuilder.bitXor(endPc, handlerMixCall(methodKey, handlerSlot, 1)));
+                                decode.set(handlerPc, AdvInsnBuilder.bitXor(handlerPc, handlerMixCall(methodKey, handlerSlot, 2)));
+                                decode.set(typeIndex, AdvInsnBuilder.bitXor(typeIndex, handlerMixCall(methodKey, handlerSlot, 3)));
+                            });
                     b.ifCondition(
                             AdvInsnBuilder.and(
                                     AdvInsnBuilder.greaterOrEqual(instructionPc, startPc),
                                     AdvInsnBuilder.lessThan(instructionPc, endPc)),
                             inRange -> {
-                                inRange.set(typeIndex, AdvInsnBuilder.arrayAt(handlers, AdvInsnBuilder.plus(index, AdvInsnBuilder.constant(3))));
                                 inRange.ifCondition(AdvInsnBuilder.lessThan(typeIndex, AdvInsnBuilder.constant(0)), catchAll -> catchAll.returnValue(handlerPc));
                                 inRange.ifCondition(
                                         AdvInsnBuilder.isTrue(AdvInsnBuilder.callVirtual(
@@ -1551,6 +1864,81 @@ public class VMGenerator extends ClassObj
                 "java/lang/Object",
                 AdvInsnBuilder.cast(key, "java/lang/Object"),
                 AdvInsnBuilder.cast(value, "java/lang/Object"));
+    }
+
+    private Expr callProgramArray(Expr program, String methodName)
+    {
+        return AdvInsnBuilder.callVirtual(program, programLayout.owner, methodName, "[I");
+    }
+
+    private Expr callProgramInt(Expr program, String methodName)
+    {
+        return AdvInsnBuilder.callVirtual(program, programLayout.owner, methodName, "I");
+    }
+
+    private Expr layoutValue(Expr program, Expr instructionIndex, Expr field)
+    {
+        return AdvInsnBuilder.callStatic(
+                className(),
+                "layoutValue",
+                "I",
+                program,
+                instructionIndex,
+                field);
+    }
+
+    private Expr mixCall(Expr key, Expr a, Expr b, Expr c)
+    {
+        return AdvInsnBuilder.callStatic(className(), "mix", "I", key, a, b, c);
+    }
+
+    private Expr handlerMixCall(Expr methodKey, Expr handlerSlot, int field)
+    {
+        return mixCall(
+                methodKey,
+                handlerSlot,
+                AdvInsnBuilder.constant(field),
+                AdvInsnBuilder.constant(ProtectedVMMethod.SALT_HANDLER));
+    }
+
+    private Expr dispatchKeyExpr(Expr opcode)
+    {
+        return mixCall(
+                AdvInsnBuilder.constant(dispatchSalt),
+                opcode,
+                AdvInsnBuilder.constant(0x3d7a91c5),
+                AdvInsnBuilder.constant(0));
+    }
+
+    private int dispatchKey(int opcode)
+    {
+        return ProtectedVMMethod.mix(dispatchSalt, opcode, 0x3d7a91c5, 0);
+    }
+
+    private Expr decodeMaybeString(Expr value)
+    {
+        return AdvInsnBuilder.callStatic(className(), "decodeMaybeString", "java/lang/String", value);
+    }
+
+    private static void mixRound(AdvInsnBuilder ib, Local x, Expr value, int salt)
+    {
+        ib.set(x, AdvInsnBuilder.bitXor(
+                x,
+                add(
+                        value,
+                        AdvInsnBuilder.constant(salt),
+                        AdvInsnBuilder.shiftLeft(x, AdvInsnBuilder.constant(6)),
+                        AdvInsnBuilder.unsignedShiftRight(x, AdvInsnBuilder.constant(2)))));
+    }
+
+    private static Expr add(Expr first, Expr... rest)
+    {
+        Expr result = first;
+        for (Expr value : rest)
+        {
+            result = AdvInsnBuilder.plus(result, value);
+        }
+        return result;
     }
 
     private Expr fieldHandle(Expr owner, Expr name, Expr descriptor, Expr isStatic, Expr setter)
