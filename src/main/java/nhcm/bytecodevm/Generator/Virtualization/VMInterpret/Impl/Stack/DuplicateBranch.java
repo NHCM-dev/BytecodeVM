@@ -1,11 +1,10 @@
 package nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Stack;
 
+import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Enums.VMOpcode;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretContext;
-import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
-import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.LabelNode;
 
 import java.util.Set;
@@ -19,20 +18,15 @@ public class DuplicateBranch extends InterpretBranch
     }
 
     @Override
-    public InsnList generate(InterpretContext context, Opcs opcode)
+    public void generate(AdvInsnBuilder ib, InterpretContext context, Opcs opcode)
     {
-        InsnBuilder ib = new InsnBuilder();
         switch (opcode)
         {
-            case DUP ->
-            {
+            case DUP -> {
                 pop(ib, context, InterpretContext.DUP_VALUE_1);
-                push(ib, context,
-                        InterpretContext.DUP_VALUE_1,
-                        InterpretContext.DUP_VALUE_1);
+                push(ib, context, InterpretContext.DUP_VALUE_1, InterpretContext.DUP_VALUE_1);
             }
-            case DUP_X1 ->
-            {
+            case DUP_X1 -> {
                 pop(ib, context, InterpretContext.DUP_VALUE_1);
                 pop(ib, context, InterpretContext.DUP_VALUE_2);
                 push(ib, context,
@@ -45,17 +39,16 @@ public class DuplicateBranch extends InterpretBranch
             case DUP2_X1 -> generateDup2X1(ib, context);
             case DUP2_X2 -> generateDup2X2(ib, context);
         }
-        return ib.toInsnList();
     }
 
-    private static void generateDupX2(InsnBuilder ib, InterpretContext context)
+    private static void generateDupX2(AdvInsnBuilder ib, InterpretContext context)
     {
         pop(ib, context, InterpretContext.DUP_VALUE_1);
         pop(ib, context, InterpretContext.DUP_VALUE_2);
 
         LabelNode category2 = new LabelNode();
         LabelNode done = new LabelNode();
-        jumpIfValueIsCategory2(ib, InterpretContext.DUP_VALUE_2, category2);
+        jumpIfValueIsCategory2(ib, context, InterpretContext.DUP_VALUE_2, category2);
 
         pop(ib, context, InterpretContext.DUP_VALUE_3);
         push(ib, context,
@@ -63,23 +56,23 @@ public class DuplicateBranch extends InterpretBranch
                 InterpretContext.DUP_VALUE_3,
                 InterpretContext.DUP_VALUE_2,
                 InterpretContext.DUP_VALUE_1);
-        ib.goto_(done);
+        ib.gotoLabel(done);
 
-        ib.label(category2);
+        ib.mark(category2, "dupX2Category2");
         push(ib, context,
                 InterpretContext.DUP_VALUE_1,
                 InterpretContext.DUP_VALUE_2,
                 InterpretContext.DUP_VALUE_1);
-        ib.label(done);
+        ib.mark(done, "dupX2Done");
     }
 
-    private static void generateDup2(InsnBuilder ib, InterpretContext context)
+    private static void generateDup2(AdvInsnBuilder ib, InterpretContext context)
     {
         pop(ib, context, InterpretContext.DUP_VALUE_1);
 
         LabelNode category2 = new LabelNode();
         LabelNode done = new LabelNode();
-        jumpIfValueIsCategory2(ib, InterpretContext.DUP_VALUE_1, category2);
+        jumpIfValueIsCategory2(ib, context, InterpretContext.DUP_VALUE_1, category2);
 
         pop(ib, context, InterpretContext.DUP_VALUE_2);
         push(ib, context,
@@ -87,22 +80,22 @@ public class DuplicateBranch extends InterpretBranch
                 InterpretContext.DUP_VALUE_1,
                 InterpretContext.DUP_VALUE_2,
                 InterpretContext.DUP_VALUE_1);
-        ib.goto_(done);
+        ib.gotoLabel(done);
 
-        ib.label(category2);
+        ib.mark(category2, "dup2Category2");
         push(ib, context,
                 InterpretContext.DUP_VALUE_1,
                 InterpretContext.DUP_VALUE_1);
-        ib.label(done);
+        ib.mark(done, "dup2Done");
     }
 
-    private static void generateDup2X1(InsnBuilder ib, InterpretContext context)
+    private static void generateDup2X1(AdvInsnBuilder ib, InterpretContext context)
     {
         pop(ib, context, InterpretContext.DUP_VALUE_1);
 
         LabelNode topCategory2 = new LabelNode();
         LabelNode done = new LabelNode();
-        jumpIfValueIsCategory2(ib, InterpretContext.DUP_VALUE_1, topCategory2);
+        jumpIfValueIsCategory2(ib, context, InterpretContext.DUP_VALUE_1, topCategory2);
 
         pop(ib, context, InterpretContext.DUP_VALUE_2);
         pop(ib, context, InterpretContext.DUP_VALUE_3);
@@ -112,18 +105,18 @@ public class DuplicateBranch extends InterpretBranch
                 InterpretContext.DUP_VALUE_3,
                 InterpretContext.DUP_VALUE_2,
                 InterpretContext.DUP_VALUE_1);
-        ib.goto_(done);
+        ib.gotoLabel(done);
 
-        ib.label(topCategory2);
+        ib.mark(topCategory2, "dup2X1TopCategory2");
         pop(ib, context, InterpretContext.DUP_VALUE_2);
         push(ib, context,
                 InterpretContext.DUP_VALUE_1,
                 InterpretContext.DUP_VALUE_2,
                 InterpretContext.DUP_VALUE_1);
-        ib.label(done);
+        ib.mark(done, "dup2X1Done");
     }
 
-    private static void generateDup2X2(InsnBuilder ib, InterpretContext context)
+    private static void generateDup2X2(AdvInsnBuilder ib, InterpretContext context)
     {
         pop(ib, context, InterpretContext.DUP_VALUE_1);
 
@@ -131,14 +124,12 @@ public class DuplicateBranch extends InterpretBranch
         LabelNode thirdCategory2 = new LabelNode();
         LabelNode secondCategory2 = new LabelNode();
         LabelNode done = new LabelNode();
-        jumpIfValueIsCategory2(ib, InterpretContext.DUP_VALUE_1, topCategory2);
+        jumpIfValueIsCategory2(ib, context, InterpretContext.DUP_VALUE_1, topCategory2);
 
-        // Forms 1 and 2: value1/value2 are category-1.
         pop(ib, context, InterpretContext.DUP_VALUE_2);
         pop(ib, context, InterpretContext.DUP_VALUE_3);
-        jumpIfValueIsCategory2(ib, InterpretContext.DUP_VALUE_3, thirdCategory2);
+        jumpIfValueIsCategory2(ib, context, InterpretContext.DUP_VALUE_3, thirdCategory2);
 
-        // Form 1: four category-1 values.
         pop(ib, context, InterpretContext.DUP_VALUE_4);
         push(ib, context,
                 InterpretContext.DUP_VALUE_2,
@@ -147,50 +138,43 @@ public class DuplicateBranch extends InterpretBranch
                 InterpretContext.DUP_VALUE_3,
                 InterpretContext.DUP_VALUE_2,
                 InterpretContext.DUP_VALUE_1);
-        ib.goto_(done);
+        ib.gotoLabel(done);
 
-        // Form 2: value3 is category-2.
-        ib.label(thirdCategory2);
+        ib.mark(thirdCategory2, "dup2X2ThirdCategory2");
         push(ib, context,
                 InterpretContext.DUP_VALUE_2,
                 InterpretContext.DUP_VALUE_1,
                 InterpretContext.DUP_VALUE_3,
                 InterpretContext.DUP_VALUE_2,
                 InterpretContext.DUP_VALUE_1);
-        ib.goto_(done);
+        ib.gotoLabel(done);
 
-        // Forms 3 and 4: value1 is category-2.
-        ib.label(topCategory2);
+        ib.mark(topCategory2, "dup2X2TopCategory2");
         pop(ib, context, InterpretContext.DUP_VALUE_2);
-        jumpIfValueIsCategory2(ib, InterpretContext.DUP_VALUE_2, secondCategory2);
+        jumpIfValueIsCategory2(ib, context, InterpretContext.DUP_VALUE_2, secondCategory2);
 
-        // Form 3: value2/value3 are category-1.
         pop(ib, context, InterpretContext.DUP_VALUE_3);
         push(ib, context,
                 InterpretContext.DUP_VALUE_1,
                 InterpretContext.DUP_VALUE_3,
                 InterpretContext.DUP_VALUE_2,
                 InterpretContext.DUP_VALUE_1);
-        ib.goto_(done);
+        ib.gotoLabel(done);
 
-        // Form 4: value1/value2 are category-2.
-        ib.label(secondCategory2);
+        ib.mark(secondCategory2, "dup2X2SecondCategory2");
         push(ib, context,
                 InterpretContext.DUP_VALUE_1,
                 InterpretContext.DUP_VALUE_2,
                 InterpretContext.DUP_VALUE_1);
-        ib.label(done);
+        ib.mark(done, "dup2X2Done");
     }
 
-    private static void pop(InsnBuilder ib, InterpretContext context, int local)
+    private static void pop(AdvInsnBuilder ib, InterpretContext context, int local)
     {
-        context.loadFrame(ib);
-        context.frame.peekWidth.invokeVirtual(ib);
-        ib.istore(widthLocal(local));
-        popObject(ib, context, local);
+        popObjectAndWidth(ib, context, local, widthLocal(local));
     }
 
-    private static void push(InsnBuilder ib, InterpretContext context, int... locals)
+    private static void push(AdvInsnBuilder ib, InterpretContext context, int... locals)
     {
         for (int local : locals)
         {
@@ -199,11 +183,12 @@ public class DuplicateBranch extends InterpretBranch
     }
 
     private static void jumpIfValueIsCategory2(
-            InsnBuilder ib,
+            AdvInsnBuilder ib,
+            InterpretContext context,
             int valueLocal,
             LabelNode target)
     {
-        jumpIfCategory2(ib, widthLocal(valueLocal), target);
+        jumpIfCategory2(ib, context.intLocal("width" + valueLocal, widthLocal(valueLocal)), target);
     }
 
     private static int widthLocal(int valueLocal)

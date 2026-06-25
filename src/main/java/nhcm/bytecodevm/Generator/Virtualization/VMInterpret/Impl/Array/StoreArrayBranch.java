@@ -1,13 +1,13 @@
 package nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Array;
 
+import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
+import nhcm.bytecodevm.AdvInsn.Expr;
+import nhcm.bytecodevm.AdvInsn.Local;
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Enums.VMOpcode;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretContext;
-import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
-import nhcm.bytecodevm.Utils.TypeUtils;
-import org.objectweb.asm.tree.InsnList;
-import org.objectweb.asm.tree.LabelNode;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.NumericType;
 
 import java.util.Set;
 
@@ -20,137 +20,79 @@ public class StoreArrayBranch extends InterpretBranch
     }
 
     @Override
-    public InsnList generate(InterpretContext context, Opcs opcode)
+    public void generate(AdvInsnBuilder ib, InterpretContext context, Opcs opcode)
     {
-        InsnBuilder ib = new InsnBuilder();
+        Local index = context.middleValue();
+        Local array = context.objectLocal("array", InterpretContext.RIGHT_VALUE);
+
         switch (opcode)
         {
-            case IASTORE, CASTORE, SASTORE ->
-            {
-                popInt(ib, context);
-                ib.istore(InterpretContext.LEFT_VALUE);
-            }
-            case LASTORE ->
-            {
-                popLong(ib, context);
-                ib.lstore(InterpretContext.LEFT_VALUE);
-            }
-            case FASTORE ->
-            {
-                popFloat(ib, context);
-                ib.fstore(InterpretContext.LEFT_VALUE);
-            }
-            case DASTORE ->
-            {
-                popDouble(ib, context);
-                ib.dstore(InterpretContext.LEFT_VALUE);
-            }
-            case AASTORE, BASTORE ->
-            {
-                popObject(ib, context);
-                ib.astore(InterpretContext.LEFT_VALUE);
-            }
+            case IASTORE, CASTORE, SASTORE -> popInt(ib, context, InterpretContext.LEFT_VALUE);
+            case LASTORE -> popLong(ib, context, InterpretContext.LEFT_VALUE);
+            case FASTORE -> popFloat(ib, context, InterpretContext.LEFT_VALUE);
+            case DASTORE -> popDouble(ib, context, InterpretContext.LEFT_VALUE);
+            case AASTORE, BASTORE -> popObject(ib, context, InterpretContext.LEFT_VALUE);
+            default -> throw new IllegalArgumentException("Unsupported array store opcode: " + opcode);
         }
-        popInt(ib, context);
-        ib.istore(InterpretContext.MIDDLE_VALUE);
-        popObject(ib, context);
-        ib.astore(InterpretContext.RIGHT_VALUE);
-        if (opcode == Opcs.BASTORE)
+
+        popInt(ib, context, InterpretContext.MIDDLE_VALUE);
+        popObject(ib, context, InterpretContext.RIGHT_VALUE);
+
+        switch (opcode)
         {
-            LabelNode byteArray = new LabelNode();
-            LabelNode falseValue = new LabelNode();
-            LabelNode storeBoolean = new LabelNode();
-            LabelNode done = new LabelNode();
-
-            ib.aload(InterpretContext.RIGHT_VALUE);
-            ib.instanceOf("[Z");
-            ib.ifeq(byteArray);
-
-            ib.aload(InterpretContext.RIGHT_VALUE);
-            ib.checkCast("[Z");
-            ib.iload(InterpretContext.MIDDLE_VALUE);
-            ib.aload(InterpretContext.LEFT_VALUE);
-            TypeUtils.unboxIntLike(ib);
-
-            ib.ifeq(falseValue);
-            ib.iconst1();
-            ib.goto_(storeBoolean);
-
-            ib.label(falseValue);
-            ib.iconst0();
-
-            ib.label(storeBoolean);
-            ib.bastore();
-            ib.goto_(done);
-
-            ib.label(byteArray);
-            ib.aload(InterpretContext.RIGHT_VALUE);
-            ib.checkCast("[B");
-            ib.iload(InterpretContext.MIDDLE_VALUE);
-            ib.aload(InterpretContext.LEFT_VALUE);
-            ib.checkCast("java/lang/Number");
-            ib.invokeVirtual("java/lang/Number", "byteValue", "()B");
-            ib.bastore();
-
-            ib.label(done);
+            case IASTORE -> ib.setArray(
+                    AdvInsnBuilder.cast(array, "[I"),
+                    index,
+                    context.leftValue(NumericType.INT));
+            case LASTORE -> ib.setArray(
+                    AdvInsnBuilder.cast(array, "[J"),
+                    index,
+                    context.leftValue(NumericType.LONG));
+            case FASTORE -> ib.setArray(
+                    AdvInsnBuilder.cast(array, "[F"),
+                    index,
+                    context.leftValue(NumericType.FLOAT));
+            case DASTORE -> ib.setArray(
+                    AdvInsnBuilder.cast(array, "[D"),
+                    index,
+                    context.leftValue(NumericType.DOUBLE));
+            case AASTORE -> ib.setArray(
+                    AdvInsnBuilder.cast(array, "[Ljava/lang/Object;"),
+                    index,
+                    context.objectLocal("value", InterpretContext.LEFT_VALUE));
+            case BASTORE -> generateByteOrBooleanStore(ib, context, array, index);
+            case CASTORE -> ib.setArray(
+                    AdvInsnBuilder.cast(array, "[C"),
+                    index,
+                    context.leftValue(NumericType.INT));
+            case SASTORE -> ib.setArray(
+                    AdvInsnBuilder.cast(array, "[S"),
+                    index,
+                    context.leftValue(NumericType.INT));
+            default -> throw new IllegalArgumentException("Unsupported array store opcode: " + opcode);
         }
-        else
-        {
-            ib.aload(InterpretContext.RIGHT_VALUE);
-            switch (opcode)
-            {
-                case IASTORE ->
-                {
-                    ib.checkCast("[I");
-                    ib.iload(InterpretContext.MIDDLE_VALUE);
-                    ib.iload(InterpretContext.LEFT_VALUE);
-                    ib.iastore();
-                }
-                case LASTORE ->
-                {
-                    ib.checkCast("[J");
-                    ib.iload(InterpretContext.MIDDLE_VALUE);
-                    ib.lload(InterpretContext.LEFT_VALUE);
-                    ib.lastore();
-                }
-                case FASTORE ->
-                {
-                    ib.checkCast("[F");
-                    ib.iload(InterpretContext.MIDDLE_VALUE);
-                    ib.fload(InterpretContext.LEFT_VALUE);
-                    ib.fastore();
-                }
-                case DASTORE ->
-                {
-                    ib.checkCast("[D");
-                    ib.iload(InterpretContext.MIDDLE_VALUE);
-                    ib.dload(InterpretContext.LEFT_VALUE);
-                    ib.dastore();
-                }
-                case AASTORE ->
-                {
-                    ib.checkCast("[Ljava/lang/Object;");
-                    ib.iload(InterpretContext.MIDDLE_VALUE);
-                    ib.aload(InterpretContext.LEFT_VALUE);
-                    ib.aastore();
-                }
-                case CASTORE ->
-                {
-                    ib.checkCast("[C");
-                    ib.iload(InterpretContext.MIDDLE_VALUE);
-                    ib.iload(InterpretContext.LEFT_VALUE);
-                    ib.castore();
-                }
-                case SASTORE ->
-                {
-                    ib.checkCast("[S");
-                    ib.iload(InterpretContext.MIDDLE_VALUE);
-                    ib.iload(InterpretContext.LEFT_VALUE);
-                    ib.sastore();
-                }
-                default -> throw new IllegalArgumentException("Unsupported array store opcode: " + opcode);
-            }
-        }
-        return ib.toInsnList();
+    }
+
+    private static void generateByteOrBooleanStore(
+            AdvInsnBuilder ib,
+            InterpretContext context,
+            Expr array,
+            Expr index)
+    {
+        Local value = context.objectLocal("value", InterpretContext.LEFT_VALUE);
+        ib.ifElse(
+                AdvInsnBuilder.isInstanceOf(array, "[Z"),
+                b -> b.setArray(
+                        AdvInsnBuilder.cast(array, "[Z"),
+                        index,
+                        AdvInsnBuilder.unbox(value, "Z")),
+                b -> b.setArray(
+                        AdvInsnBuilder.cast(array, "[B"),
+                        index,
+                        AdvInsnBuilder.callVirtual(
+                                AdvInsnBuilder.cast(value, "java/lang/Number"),
+                                "java/lang/Number",
+                                "byteValue",
+                                "B")));
     }
 }

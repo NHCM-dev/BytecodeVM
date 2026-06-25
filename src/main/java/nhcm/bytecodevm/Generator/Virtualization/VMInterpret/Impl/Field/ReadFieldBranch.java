@@ -1,12 +1,13 @@
 package nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Field;
 
+import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
+import nhcm.bytecodevm.AdvInsn.Condition;
+import nhcm.bytecodevm.AdvInsn.Expr;
+import nhcm.bytecodevm.AdvInsn.Local;
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Enums.VMOpcode;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretContext;
-import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
-import org.objectweb.asm.tree.InsnList;
-import org.objectweb.asm.tree.LabelNode;
 
 import java.util.Set;
 
@@ -19,65 +20,60 @@ public class ReadFieldBranch extends InterpretBranch
     }
 
     @Override
-    public InsnList generate(InterpretContext context, Opcs opcode)
+    public void generate(AdvInsnBuilder ib, InterpretContext context, Opcs opcode)
     {
-        InsnBuilder ib = new InsnBuilder();
+        Local owner = context.local("fieldOwner", "java/lang/String", InterpretContext.FIELD_OWNER);
+        Local name = context.local("fieldName", "java/lang/String", InterpretContext.FIELD_NAME);
+        Local descriptor = context.local("fieldDescriptor", "java/lang/String", InterpretContext.FIELD_DESCRIPTOR);
+        Local receiver = context.objectLocal("fieldReceiver", InterpretContext.FIELD_RECEIVER);
+        Local result = context.objectLocal("fieldResult", InterpretContext.FIELD_RESULT);
 
-        readConstantString(ib, context);
-        ib.astore(InterpretContext.FIELD_OWNER);
-        readConstantString(ib, context);
-        ib.astore(InterpretContext.FIELD_NAME);
-        readConstantString(ib, context);
-        ib.astore(InterpretContext.FIELD_DESCRIPTOR);
-
-        ib.aload(InterpretContext.FIELD_OWNER);
-        ib.aload(InterpretContext.FIELD_NAME);
-        ib.aload(InterpretContext.FIELD_DESCRIPTOR);
+        ib.set(owner, readConstantString(ib, context));
+        ib.set(name, readConstantString(ib, context));
+        ib.set(descriptor, readConstantString(ib, context));
 
         if (opcode == Opcs.GETSTATIC)
         {
-            ib.iconst1();
-            ib.aconstNull();
+            ib.set(receiver, AdvInsnBuilder.nullValue("java/lang/Object"));
         }
         else
         {
-            ib.iconst0();
-            popObject(ib, context);
+            popObject(ib, context, receiver);
         }
 
-        context.vm.getField.invokeStatic(ib);
+        ib.set(result, AdvInsnBuilder.callStatic(
+                context.vm.owner,
+                context.vm.getField.name(),
+                "java/lang/Object",
+                owner,
+                name,
+                descriptor,
+                AdvInsnBuilder.constant(opcode == Opcs.GETSTATIC),
+                receiver));
 
-        ib.astore(InterpretContext.FIELD_RESULT);
-
-        LabelNode category2 = new LabelNode();
-        LabelNode done = new LabelNode();
-        ib.aload(InterpretContext.FIELD_DESCRIPTOR);
-        ib.iconst0();
-        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
-        ib.bipush('J');
-        ib.ifIcmpEq(category2);
-        ib.aload(InterpretContext.FIELD_DESCRIPTOR);
-        ib.iconst0();
-        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
-        ib.bipush('D');
-        ib.ifIcmpEq(category2);
-
-        pushObject(ib, context, InterpretContext.FIELD_RESULT);
-        ib.goto_(done);
-
-        ib.label(category2);
-        ib.aload(InterpretContext.FIELD_RESULT);
-        pushObjectWithWidth(ib, context, 2);
-        ib.label(done);
-        return ib.toInsnList();
+        ib.ifElse(
+                isCategory2Descriptor(descriptor),
+                b -> pushObjectWithWidth(b, context, result, AdvInsnBuilder.constant(2)),
+                b -> pushObject(b, context, result));
     }
 
-    private static void readConstantString(
-            InsnBuilder ib,
-            InterpretContext context)
+    private static Expr readConstantString(AdvInsnBuilder ib, InterpretContext context)
     {
-        ib.aload(InterpretContext.CONSTANTS);
-        context.nextToken(ib);
-        context.vm.constantString.invokeStatic(ib);
+        Local token = context.intLocal("fieldToken", InterpretContext.JUMP_TARGET);
+        context.nextToken(ib, token);
+        return context.constantString(token);
+    }
+
+    private static Condition isCategory2Descriptor(Local descriptor)
+    {
+        Expr firstChar = AdvInsnBuilder.callVirtual(
+                descriptor,
+                "java/lang/String",
+                "charAt",
+                "C",
+                AdvInsnBuilder.constant(0));
+        return AdvInsnBuilder.or(
+                AdvInsnBuilder.equal(firstChar, AdvInsnBuilder.constant('J')),
+                AdvInsnBuilder.equal(firstChar, AdvInsnBuilder.constant('D')));
     }
 }

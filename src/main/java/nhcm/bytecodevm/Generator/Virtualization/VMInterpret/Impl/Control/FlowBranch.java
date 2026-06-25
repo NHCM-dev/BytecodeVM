@@ -1,12 +1,13 @@
 package nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Control;
 
+import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
+import nhcm.bytecodevm.AdvInsn.Condition;
+import nhcm.bytecodevm.AdvInsn.Expr;
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Enums.VMOpcode;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretContext;
-import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
-import org.objectweb.asm.tree.InsnList;
-import org.objectweb.asm.tree.LabelNode;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.NumericType;
 
 import java.util.Set;
 
@@ -19,78 +20,54 @@ public class FlowBranch extends InterpretBranch
     }
 
     @Override
-    public InsnList generate(InterpretContext context, Opcs opcode)
+    public void generate(AdvInsnBuilder ib, InterpretContext context, Opcs opcode)
     {
-        InsnBuilder ib = new InsnBuilder();
+        var jumpTarget = context.intLocal("jumpTarget", InterpretContext.JUMP_TARGET);
+        context.nextToken(ib, jumpTarget);
 
-        context.nextToken(ib);
-        ib.istore(InterpretContext.JUMP_TARGET);
-
-        LabelNode skipJump = new LabelNode();
-
-        switch (opcode)
+        Condition condition = switch (opcode)
         {
-            case IFEQ, IFNE, IFLT, IFGE, IFGT, IFLE ->
-            {
-                popInt(ib, context);
-                switch (opcode)
-                {
-                    case IFEQ -> ib.ifne(skipJump);
-                    case IFNE -> ib.ifeq(skipJump);
-                    case IFLT -> ib.ifge(skipJump);
-                    case IFGE -> ib.iflt(skipJump);
-                    case IFGT -> ib.ifle(skipJump);
-                    case IFLE -> ib.ifgt(skipJump);
-                }
+            case IFEQ, IFNE, IFLT, IFGE, IFGT, IFLE -> {
+                popInt(ib, context, InterpretContext.RIGHT_VALUE);
+                yield intCondition(opcode, context.rightValue(NumericType.INT), AdvInsnBuilder.constant(0));
             }
-            case IF_ICMPEQ, IF_ICMPNE, IF_ICMPLT, IF_ICMPGE, IF_ICMPGT, IF_ICMPLE ->
-            {
+            case IF_ICMPEQ, IF_ICMPNE, IF_ICMPLT, IF_ICMPGE, IF_ICMPGT, IF_ICMPLE -> {
                 popInt(ib, context, InterpretContext.RIGHT_VALUE);
                 popInt(ib, context, InterpretContext.LEFT_VALUE);
-                ib.iload(InterpretContext.LEFT_VALUE);
-                ib.iload(InterpretContext.RIGHT_VALUE);
-                switch (opcode)
-                {
-                    case IF_ICMPEQ -> ib.ifIcmpNe(skipJump);
-                    case IF_ICMPNE -> ib.ifIcmpEq(skipJump);
-                    case IF_ICMPLT -> ib.ifIcmpGe(skipJump);
-                    case IF_ICMPGE -> ib.ifIcmpLt(skipJump);
-                    case IF_ICMPGT -> ib.ifIcmpLe(skipJump);
-                    case IF_ICMPLE -> ib.ifIcmpGt(skipJump);
-                }
+                yield intCondition(opcode, context.leftValue(NumericType.INT), context.rightValue(NumericType.INT));
             }
-            case IF_ACMPEQ, IF_ACMPNE ->
-            {
+            case IF_ACMPEQ, IF_ACMPNE -> {
                 popObject(ib, context, InterpretContext.RIGHT_VALUE);
                 popObject(ib, context, InterpretContext.LEFT_VALUE);
-                ib.aload(InterpretContext.LEFT_VALUE);
-                ib.aload(InterpretContext.RIGHT_VALUE);
-                switch (opcode)
-                {
-                    case IF_ACMPEQ -> ib.ifAcmpNe(skipJump);
-                    case IF_ACMPNE -> ib.ifAcmpEq(skipJump);
-                }
+                yield opcode == Opcs.IF_ACMPEQ
+                        ? AdvInsnBuilder.equal(context.objectLocal("left", InterpretContext.LEFT_VALUE),
+                                               context.objectLocal("right", InterpretContext.RIGHT_VALUE))
+                        : AdvInsnBuilder.notEqual(context.objectLocal("left", InterpretContext.LEFT_VALUE),
+                                                  context.objectLocal("right", InterpretContext.RIGHT_VALUE));
             }
-            case IFNULL, IFNONNULL ->
-            {
-                popObject(ib, context);
-                switch (opcode)
-                {
-                    case IFNULL -> ib.ifNonNull(skipJump);
-                    case IFNONNULL -> ib.ifNull(skipJump);
-                }
+            case IFNULL, IFNONNULL -> {
+                popObject(ib, context, InterpretContext.RIGHT_VALUE);
+                yield opcode == Opcs.IFNULL
+                        ? AdvInsnBuilder.isNull(context.objectLocal("value", InterpretContext.RIGHT_VALUE))
+                        : AdvInsnBuilder.notNull(context.objectLocal("value", InterpretContext.RIGHT_VALUE));
             }
-        }
+            default -> throw new IllegalArgumentException("Unsupported flow opcode: " + opcode);
+        };
 
-        setProgramCounter(ib, context);
-        ib.label(skipJump);
-        return ib.toInsnList();
+        ib.ifCondition(condition, b -> b.set(context.frameProgramCounter(), jumpTarget));
     }
 
-    private static void setProgramCounter(InsnBuilder ib, InterpretContext context)
+    private static Condition intCondition(Opcs opcode, Expr left, Expr right)
     {
-        context.loadFrame(ib);
-        ib.iload(InterpretContext.JUMP_TARGET);
-        context.frame.programCounter.put(ib);
+        return switch (opcode)
+        {
+            case IFEQ, IF_ICMPEQ -> AdvInsnBuilder.equal(left, right);
+            case IFNE, IF_ICMPNE -> AdvInsnBuilder.notEqual(left, right);
+            case IFLT, IF_ICMPLT -> AdvInsnBuilder.lessThan(left, right);
+            case IFGE, IF_ICMPGE -> AdvInsnBuilder.greaterOrEqual(left, right);
+            case IFGT, IF_ICMPGT -> AdvInsnBuilder.greaterThan(left, right);
+            case IFLE, IF_ICMPLE -> AdvInsnBuilder.lessOrEqual(left, right);
+            default -> throw new IllegalArgumentException("Unsupported int flow opcode: " + opcode);
+        };
     }
 }

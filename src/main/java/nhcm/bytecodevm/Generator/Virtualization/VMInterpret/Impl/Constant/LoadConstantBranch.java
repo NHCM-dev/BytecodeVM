@@ -1,12 +1,11 @@
 package nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Constant;
 
+import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
+import nhcm.bytecodevm.AdvInsn.Local;
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Enums.VMOpcode;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretContext;
-import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
-import org.objectweb.asm.tree.InsnList;
-import org.objectweb.asm.tree.LabelNode;
 
 import java.util.Set;
 
@@ -19,34 +18,25 @@ public class LoadConstantBranch extends InterpretBranch
     }
 
     @Override
-    public InsnList generate(InterpretContext context, Opcs opcode)
+    public void generate(AdvInsnBuilder ib, InterpretContext context, Opcs opcode)
     {
-        InsnBuilder ib = new InsnBuilder();
-        ib.aload(InterpretContext.CONSTANTS);
-        context.nextToken(ib);
-        ib.aaload();
-        ib.astore(InterpretContext.DUP_VALUE_1);
-        ib.aload(InterpretContext.DUP_VALUE_1);
-        context.loadFrame(ib);
-        context.vm.resolveConstant.invokeStatic(ib);
-        ib.astore(InterpretContext.DUP_VALUE_1);
+        Local constantIndex = context.intLocal("constantIndex", InterpretContext.RIGHT_VALUE);
+        Local constant = context.objectLocal("constant", InterpretContext.DUP_VALUE_1);
 
-        LabelNode category2 = new LabelNode();
-        LabelNode done = new LabelNode();
-        ib.aload(InterpretContext.DUP_VALUE_1);
-        ib.instanceOf("java/lang/Long");
-        ib.ifne(category2);
-        ib.aload(InterpretContext.DUP_VALUE_1);
-        ib.instanceOf("java/lang/Double");
-        ib.ifne(category2);
+        context.nextToken(ib, constantIndex);
+        ib.set(constant, AdvInsnBuilder.arrayAt(context.constants(), constantIndex));
+        ib.set(constant, AdvInsnBuilder.callStatic(
+                context.vm.owner,
+                context.vm.resolveConstant.name(),
+                "java/lang/Object",
+                constant,
+                context.frame()));
 
-        pushObject(ib, context, InterpretContext.DUP_VALUE_1);
-        ib.goto_(done);
-
-        ib.label(category2);
-        ib.aload(InterpretContext.DUP_VALUE_1);
-        pushObjectWithWidth(ib, context, 2);
-        ib.label(done);
-        return ib.toInsnList();
+        ib.ifElse(
+                AdvInsnBuilder.or(
+                        AdvInsnBuilder.isInstanceOf(constant, "java/lang/Long"),
+                        AdvInsnBuilder.isInstanceOf(constant, "java/lang/Double")),
+                category2 -> pushObjectWithWidth(category2, context, constant, AdvInsnBuilder.constant(2)),
+                category1 -> pushObject(category1, context, constant));
     }
 }

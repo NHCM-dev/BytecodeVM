@@ -1,12 +1,13 @@
 package nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Math.Abstract;
 
+import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
+import nhcm.bytecodevm.AdvInsn.Expr;
+import nhcm.bytecodevm.AdvInsn.Local;
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Enums.VMOpcode;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretContext;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.NumericType;
-import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
-import org.objectweb.asm.tree.InsnList;
 
 import java.util.Set;
 
@@ -26,7 +27,7 @@ public abstract class ShiftMathBranch extends InterpretBranch
     }
 
     @Override
-    public final InsnList generate(InterpretContext context, Opcs opcode)
+    public final void generate(AdvInsnBuilder ib, InterpretContext context, Opcs opcode)
     {
         if (!vmOpcode.contains(opcode))
         {
@@ -34,15 +35,12 @@ public abstract class ShiftMathBranch extends InterpretBranch
         }
 
         NumericType valueType = NumericType.fromOpcode(opcode);
-        InsnBuilder ib = new InsnBuilder();
-        popNumber(ib, context, NumericType.INT, InterpretContext.RIGHT_VALUE);
-        popNumber(ib, context, valueType, InterpretContext.LEFT_VALUE);
-        valueType.load(ib, InterpretContext.LEFT_VALUE);
-        NumericType.INT.load(ib, InterpretContext.RIGHT_VALUE);
-        emitOperation(ib, valueType);
-        pushNumber(ib, context, valueType);
-        return ib.toInsnList();
+        Local distance = context.rightValue(NumericType.INT);
+        Local value = context.leftValue(valueType);
+        popNumber(ib, context, NumericType.INT, distance);
+        popNumber(ib, context, valueType, value);
+        pushNumber(ib, context, valueType, operation(value, distance));
     }
 
-    protected abstract void emitOperation(InsnBuilder ib, NumericType type);
+    protected abstract Expr operation(Expr value, Expr distance);
 }

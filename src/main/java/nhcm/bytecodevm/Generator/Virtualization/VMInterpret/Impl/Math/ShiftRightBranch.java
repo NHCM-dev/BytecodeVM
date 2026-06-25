@@ -1,9 +1,9 @@
 package nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Math;
 
 import nhcm.bytecodevm.Enums.VMOpcode;
+import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
+import nhcm.bytecodevm.AdvInsn.Expr;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Math.Abstract.ShiftMathBranch;
-import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.NumericType;
-import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
 
 public class ShiftRightBranch extends ShiftMathBranch
 {
@@ -13,13 +13,8 @@ public class ShiftRightBranch extends ShiftMathBranch
     }
 
     @Override
-    protected void emitOperation(InsnBuilder ib, NumericType type)
+    protected Expr operation(Expr value, Expr distance)
     {
-        switch (type)
-        {
-            case INT: ib.ishr(); break;
-            case LONG: ib.lshr(); break;
-            default: throw new IllegalArgumentException("Unsupported shift type: " + type);
-        }
+        return AdvInsnBuilder.shiftRight(value, distance);
     }
 }

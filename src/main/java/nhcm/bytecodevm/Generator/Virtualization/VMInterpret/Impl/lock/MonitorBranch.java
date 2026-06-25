@@ -1,11 +1,10 @@
 package nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.lock;
 
+import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Enums.VMOpcode;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretContext;
-import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
-import org.objectweb.asm.tree.InsnList;
 
 import java.util.Set;
 
@@ -18,18 +17,22 @@ public class MonitorBranch extends InterpretBranch
     }
 
     @Override
-    public InsnList generate(InterpretContext context, Opcs opcode)
+    public void generate(AdvInsnBuilder ib, InterpretContext context, Opcs opcode)
     {
-        InsnBuilder ib = new InsnBuilder();
         popObject(ib, context);
-
         switch (opcode)
         {
-            case MONITORENTER -> context.vm.monitorEnter.invokeStatic(ib);
-            case MONITOREXIT -> context.vm.monitorExit.invokeStatic(ib);
+            case MONITORENTER -> ib.directCall(AdvInsnBuilder.callStatic(
+                    context.vm.owner,
+                    context.vm.monitorEnter.name(),
+                    "V",
+                    context.stackObject()));
+            case MONITOREXIT -> ib.directCall(AdvInsnBuilder.callStatic(
+                    context.vm.owner,
+                    context.vm.monitorExit.name(),
+                    "V",
+                    context.stackObject()));
             default -> throw new IllegalArgumentException("Unsupported monitor opcode: " + opcode);
         }
-
-        return ib.toInsnList();
     }
 }

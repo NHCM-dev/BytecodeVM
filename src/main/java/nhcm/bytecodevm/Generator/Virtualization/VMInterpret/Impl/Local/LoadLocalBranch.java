@@ -1,11 +1,11 @@
 package nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Local;
 
+import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
+import nhcm.bytecodevm.AdvInsn.Local;
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Enums.VMOpcode;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretContext;
-import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
-import org.objectweb.asm.tree.InsnList;
 
 import java.util.Set;
 
@@ -18,21 +18,17 @@ public class LoadLocalBranch extends InterpretBranch
     }
 
     @Override
-    public InsnList generate(InterpretContext context, Opcs opcode)
+    public void generate(AdvInsnBuilder ib, InterpretContext context, Opcs opcode)
     {
-        InsnBuilder ib = new InsnBuilder();
-        context.loadFrame(ib);
-        context.frame.locals.get(ib);
-        context.nextToken(ib);
-        ib.aaload();
+        Local localIndex = context.intLocal("localIndex", InterpretContext.RIGHT_VALUE);
+        context.nextToken(ib, localIndex);
         if (opcode == Opcs.LLOAD || opcode == Opcs.DLOAD)
         {
-            pushObjectWithWidth(ib, context, 2);
+            pushObjectWithWidth(ib, context, AdvInsnBuilder.arrayAt(context.locals(), localIndex), AdvInsnBuilder.constant(2));
         }
         else
         {
-            pushObject(ib, context);
+            pushObject(ib, context, AdvInsnBuilder.arrayAt(context.locals(), localIndex));
         }
-        return ib.toInsnList();
     }
 }

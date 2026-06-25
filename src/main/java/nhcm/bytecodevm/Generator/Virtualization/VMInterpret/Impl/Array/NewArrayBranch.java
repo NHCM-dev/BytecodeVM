@@ -1,13 +1,14 @@
 package nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Array;
 
+import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
+import nhcm.bytecodevm.AdvInsn.Expr;
+import nhcm.bytecodevm.AdvInsn.Local;
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Enums.VMOpcode;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretContext;
-import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.NumericType;
 import org.objectweb.asm.Opcodes;
-import org.objectweb.asm.tree.InsnList;
-import org.objectweb.asm.tree.LabelNode;
 
 import java.util.Set;
 
@@ -20,9 +21,8 @@ public class NewArrayBranch extends InterpretBranch
     }
 
     @Override
-    public InsnList generate(InterpretContext context, Opcs opcode)
+    public void generate(AdvInsnBuilder ib, InterpretContext context, Opcs opcode)
     {
-        InsnBuilder ib = new InsnBuilder();
         switch (opcode)
         {
             case NEWARRAY -> generatePrimitiveArray(ib, context);
@@ -30,145 +30,96 @@ public class NewArrayBranch extends InterpretBranch
             case MULTIANEWARRAY -> generateMultiArray(ib, context);
             default -> throw new IllegalArgumentException("Unsupported new array opcode: " + opcode);
         }
-        return ib.toInsnList();
     }
 
-    private static void generatePrimitiveArray(InsnBuilder ib, InterpretContext context)
+    private static void generatePrimitiveArray(AdvInsnBuilder ib, InterpretContext context)
     {
-        LabelNode booleanType = new LabelNode();
-        LabelNode charType = new LabelNode();
-        LabelNode floatType = new LabelNode();
-        LabelNode doubleType = new LabelNode();
-        LabelNode byteType = new LabelNode();
-        LabelNode shortType = new LabelNode();
-        LabelNode intType = new LabelNode();
-        LabelNode longType = new LabelNode();
-        LabelNode create = new LabelNode();
+        Local atype = context.intLocal("arrayAType", InterpretContext.ARRAY_ATYPE);
+        Local component = context.local("arrayComponent", "java/lang/Class", InterpretContext.ARRAY_COMPONENT);
 
-        context.nextToken(ib);
-        ib.istore(InterpretContext.ARRAY_ATYPE);
+        context.nextToken(ib, atype);
+        ib.switchLookup(
+                atype,
+                b -> b.throwValue(AdvInsnBuilder.newObject(
+                        "java/lang/IllegalArgumentException",
+                        AdvInsnBuilder.constant("Unknown NEWARRAY atype"))),
+                AdvInsnBuilder.switchCase(Opcodes.T_BOOLEAN, b -> b.set(component, primitiveType("java/lang/Boolean"))),
+                AdvInsnBuilder.switchCase(Opcodes.T_CHAR, b -> b.set(component, primitiveType("java/lang/Character"))),
+                AdvInsnBuilder.switchCase(Opcodes.T_FLOAT, b -> b.set(component, primitiveType("java/lang/Float"))),
+                AdvInsnBuilder.switchCase(Opcodes.T_DOUBLE, b -> b.set(component, primitiveType("java/lang/Double"))),
+                AdvInsnBuilder.switchCase(Opcodes.T_BYTE, b -> b.set(component, primitiveType("java/lang/Byte"))),
+                AdvInsnBuilder.switchCase(Opcodes.T_SHORT, b -> b.set(component, primitiveType("java/lang/Short"))),
+                AdvInsnBuilder.switchCase(Opcodes.T_INT, b -> b.set(component, primitiveType("java/lang/Integer"))),
+                AdvInsnBuilder.switchCase(Opcodes.T_LONG, b -> b.set(component, primitiveType("java/lang/Long"))));
 
-        ib.iload(InterpretContext.ARRAY_ATYPE);
-        ib.pushInt(Opcodes.T_BOOLEAN);
-        ib.ifIcmpEq(booleanType);
-        ib.iload(InterpretContext.ARRAY_ATYPE);
-        ib.pushInt(Opcodes.T_CHAR);
-        ib.ifIcmpEq(charType);
-        ib.iload(InterpretContext.ARRAY_ATYPE);
-        ib.pushInt(Opcodes.T_FLOAT);
-        ib.ifIcmpEq(floatType);
-        ib.iload(InterpretContext.ARRAY_ATYPE);
-        ib.pushInt(Opcodes.T_DOUBLE);
-        ib.ifIcmpEq(doubleType);
-        ib.iload(InterpretContext.ARRAY_ATYPE);
-        ib.pushInt(Opcodes.T_BYTE);
-        ib.ifIcmpEq(byteType);
-        ib.iload(InterpretContext.ARRAY_ATYPE);
-        ib.pushInt(Opcodes.T_SHORT);
-        ib.ifIcmpEq(shortType);
-        ib.iload(InterpretContext.ARRAY_ATYPE);
-        ib.pushInt(Opcodes.T_INT);
-        ib.ifIcmpEq(intType);
-        ib.iload(InterpretContext.ARRAY_ATYPE);
-        ib.pushInt(Opcodes.T_LONG);
-        ib.ifIcmpEq(longType);
-
-        ib.new_("java/lang/IllegalArgumentException");
-        ib.dup();
-        ib.ldc("Unknown NEWARRAY atype");
-        ib.invokeSpecial("java/lang/IllegalArgumentException", "<init>", "(Ljava/lang/String;)V");
-        ib.athrow();
-
-        emitPrimitiveClass(ib, booleanType, "java/lang/Boolean", create);
-        emitPrimitiveClass(ib, charType, "java/lang/Character", create);
-        emitPrimitiveClass(ib, floatType, "java/lang/Float", create);
-        emitPrimitiveClass(ib, doubleType, "java/lang/Double", create);
-        emitPrimitiveClass(ib, byteType, "java/lang/Byte", create);
-        emitPrimitiveClass(ib, shortType, "java/lang/Short", create);
-        emitPrimitiveClass(ib, intType, "java/lang/Integer", create);
-        emitPrimitiveClass(ib, longType, "java/lang/Long", create);
-
-        ib.label(create);
-        createSingleArray(ib, context);
+        createSingleArray(ib, context, component);
     }
 
-    private static void generateReferenceArray(InsnBuilder ib, InterpretContext context)
+    private static void generateReferenceArray(AdvInsnBuilder ib, InterpretContext context)
     {
-        readClass(ib, context);
-        createSingleArray(ib, context);
+        Local classIndex = context.intLocal("arrayClassIndex", InterpretContext.ARRAY_ATYPE);
+        Local component = context.local("arrayComponent", "java/lang/Class", InterpretContext.ARRAY_COMPONENT);
+
+        context.nextToken(ib, classIndex);
+        ib.set(component, context.loadClass(context.constantString(classIndex)));
+        createSingleArray(ib, context, component);
     }
 
-    private static void generateMultiArray(InsnBuilder ib, InterpretContext context)
+    private static void generateMultiArray(AdvInsnBuilder ib, InterpretContext context)
     {
-        readClass(ib, context);
-        ib.astore(InterpretContext.ARRAY_COMPONENT);
+        Local classIndex = context.intLocal("arrayClassIndex", InterpretContext.ARRAY_ATYPE);
+        Local component = context.local("arrayComponent", "java/lang/Class", InterpretContext.ARRAY_COMPONENT);
+        Local dimensions = context.intLocal("arrayDimensions", InterpretContext.ARRAY_DIMENSIONS);
+        Local lengths = context.local("arrayLengths", "[I", InterpretContext.ARRAY_LENGTHS);
+        Local index = context.intLocal("arrayIndex", InterpretContext.ARRAY_INDEX);
 
-        context.nextToken(ib);
-        ib.istore(InterpretContext.ARRAY_DIMENSIONS);
+        context.nextToken(ib, classIndex);
+        ib.set(component, context.loadClass(context.constantString(classIndex)));
 
-        ib.iload(InterpretContext.ARRAY_DIMENSIONS);
-        ib.newArray(Opcodes.T_INT);
-        ib.astore(InterpretContext.ARRAY_LENGTHS);
+        context.nextToken(ib, dimensions);
+        ib.set(lengths, AdvInsnBuilder.newArray("I", dimensions));
+        ib.set(index, AdvInsnBuilder.minus(dimensions, AdvInsnBuilder.constant(1)));
+        ib.whileLoop(
+                AdvInsnBuilder.greaterOrEqual(index, AdvInsnBuilder.constant(0)),
+                b -> {
+                    popInt(b, context, InterpretContext.RIGHT_VALUE);
+                    b.setArray(lengths, index, context.rightValue(NumericType.INT));
+                    b.increment(index, -1);
+                });
 
-        ib.iload(InterpretContext.ARRAY_DIMENSIONS);
-        ib.iconst1();
-        ib.isub();
-        ib.istore(InterpretContext.ARRAY_INDEX);
+        ib.set(index, AdvInsnBuilder.constant(0));
+        ib.whileLoop(
+                AdvInsnBuilder.lessThan(index, dimensions),
+                b -> {
+                    b.set(component, AdvInsnBuilder.callVirtual(
+                            component,
+                            "java/lang/Class",
+                            "getComponentType",
+                            "java/lang/Class"));
+                    b.increment(index, 1);
+                });
 
-        LabelNode readLengths = new LabelNode();
-        LabelNode lengthsDone = new LabelNode();
-        ib.label(readLengths);
-        ib.iload(InterpretContext.ARRAY_INDEX);
-        ib.iflt(lengthsDone);
-        ib.aload(InterpretContext.ARRAY_LENGTHS);
-        ib.iload(InterpretContext.ARRAY_INDEX);
-        popInt(ib, context);
-        ib.iastore();
-        ib.iinc(InterpretContext.ARRAY_INDEX, -1);
-        ib.goto_(readLengths);
-        ib.label(lengthsDone);
-
-        ib.iconst0();
-        ib.istore(InterpretContext.ARRAY_INDEX);
-
-        LabelNode peelComponent = new LabelNode();
-        LabelNode componentDone = new LabelNode();
-        ib.label(peelComponent);
-        ib.iload(InterpretContext.ARRAY_INDEX);
-        ib.iload(InterpretContext.ARRAY_DIMENSIONS);
-        ib.ifIcmpGe(componentDone);
-        ib.aload(InterpretContext.ARRAY_COMPONENT);
-        ib.invokeVirtual("java/lang/Class", "getComponentType", "()Ljava/lang/Class;");
-        ib.astore(InterpretContext.ARRAY_COMPONENT);
-        ib.iinc(InterpretContext.ARRAY_INDEX, 1);
-        ib.goto_(peelComponent);
-        ib.label(componentDone);
-
-        ib.aload(InterpretContext.ARRAY_COMPONENT);
-        ib.aload(InterpretContext.ARRAY_LENGTHS);
-        ib.invokeStatic("java/lang/reflect/Array", "newInstance", "(Ljava/lang/Class;[I)Ljava/lang/Object;");
-        pushObject(ib, context);
+        pushObject(ib, context, AdvInsnBuilder.callStatic(
+                "java/lang/reflect/Array",
+                "newInstance",
+                "java/lang/Object",
+                component,
+                lengths));
     }
 
-    private static void createSingleArray(InsnBuilder ib, InterpretContext context)
+    private static void createSingleArray(AdvInsnBuilder ib, InterpretContext context, Expr component)
     {
-        popInt(ib, context);
-        ib.invokeStatic("java/lang/reflect/Array", "newInstance", "(Ljava/lang/Class;I)Ljava/lang/Object;");
-        pushObject(ib, context);
+        popInt(ib, context, InterpretContext.RIGHT_VALUE);
+        pushObject(ib, context, AdvInsnBuilder.callStatic(
+                "java/lang/reflect/Array",
+                "newInstance",
+                "java/lang/Object",
+                component,
+                context.rightValue(NumericType.INT)));
     }
 
-    private static void readClass(InsnBuilder ib, InterpretContext context)
+    private static Expr primitiveType(String boxedOwner)
     {
-        ib.aload(InterpretContext.CONSTANTS);
-        context.nextToken(ib);
-        context.vm.constantString.invokeStatic(ib);
-        context.vm.loadOwner.invokeStatic(ib);
-    }
-
-    private static void emitPrimitiveClass(InsnBuilder ib, LabelNode label, String boxedOwner, LabelNode create)
-    {
-        ib.label(label);
-        ib.getStatic(boxedOwner, "TYPE", "Ljava/lang/Class;");
-        ib.goto_(create);
+        return AdvInsnBuilder.staticField(boxedOwner, "TYPE", "java/lang/Class");
     }
 }

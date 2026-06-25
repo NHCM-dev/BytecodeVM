@@ -1,11 +1,10 @@
 package nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Object;
 
+import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Enums.VMOpcode;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretContext;
-import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
-import org.objectweb.asm.tree.InsnList;
 
 import java.util.Set;
 
@@ -18,21 +17,14 @@ public class NewObjectBranch extends InterpretBranch
     }
 
     @Override
-    public InsnList generate(InterpretContext context, Opcs opcode)
+    public void generate(AdvInsnBuilder ib, InterpretContext context, Opcs opcode)
     {
-        InsnBuilder ib = new InsnBuilder();
+        var classIndex = context.intLocal("classIndex", InterpretContext.JUMP_TARGET);
+        var marker = context.local("identityMarker", "[Ljava/lang/Object;", InterpretContext.FIELD_VALUE);
 
-        // An Object[1] is an identity marker for the JVM's uninitialized value.
-        // Its owner string is useful for diagnostics and keeps the marker runtime-only.
-        ib.iconst1();
-        ib.aneArray("java/lang/Object");
-        ib.dup();
-        ib.iconst0();
-        ib.aload(InterpretContext.CONSTANTS);
-        context.nextToken(ib);
-        ib.aaload();
-        ib.aastore();
-        pushObject(ib, context);
-        return ib.toInsnList();
+        context.nextToken(ib, classIndex);
+        ib.set(marker, AdvInsnBuilder.newArray("java/lang/Object", AdvInsnBuilder.constant(1)));
+        ib.setArray(marker, AdvInsnBuilder.constant(0), AdvInsnBuilder.arrayAt(context.constants(), classIndex));
+        pushObject(ib, context, marker);
     }
 }

@@ -1,9 +1,9 @@
 package nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Math;
 
 import nhcm.bytecodevm.Enums.VMOpcode;
+import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
+import nhcm.bytecodevm.AdvInsn.Expr;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Math.Abstract.BinaryMathBranch;
-import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.NumericType;
-import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
 
 public class AddBranch extends BinaryMathBranch
 {
@@ -13,14 +13,8 @@ public class AddBranch extends BinaryMathBranch
     }
 
     @Override
-    protected void emitOperation(InsnBuilder ib, NumericType type)
+    protected Expr operation(Expr left, Expr right)
     {
-        switch (type)
-        {
-            case INT: ib.iadd(); break;
-            case LONG: ib.ladd(); break;
-            case FLOAT: ib.fadd(); break;
-            case DOUBLE: ib.dadd(); break;
-        }
+        return AdvInsnBuilder.plus(left, right);
     }
 }

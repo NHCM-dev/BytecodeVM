@@ -123,6 +123,21 @@ final class AdvInsnSupport
         switch (normalizedFrom.getSort())
         {
             case Type.INT -> {
+                switch (to.getSort())
+                {
+                    case Type.BYTE -> {
+                        ib.i2b();
+                        return;
+                    }
+                    case Type.CHAR -> {
+                        ib.i2c();
+                        return;
+                    }
+                    case Type.SHORT -> {
+                        ib.i2s();
+                        return;
+                    }
+                }
                 switch (normalizedTo.getSort())
                 {
                     case Type.LONG -> ib.i2l();

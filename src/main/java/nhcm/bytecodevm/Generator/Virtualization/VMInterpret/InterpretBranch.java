@@ -1,9 +1,9 @@
 package nhcm.bytecodevm.Generator.Virtualization.VMInterpret;
 
-import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
-import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
-import org.objectweb.asm.tree.InsnList;
+import nhcm.bytecodevm.AdvInsn.Expr;
+import nhcm.bytecodevm.AdvInsn.Local;
+import nhcm.bytecodevm.Enums.Opcs;
 import org.objectweb.asm.tree.LabelNode;
 
 import java.util.Set;
@@ -12,455 +12,208 @@ public abstract class InterpretBranch
 {
     public abstract Set<Opcs> opcodes();
 
-    public abstract InsnList generate(InterpretContext context, Opcs opcode);
-
-    public void generate(AdvInsnBuilder ib, InterpretContext context, Opcs opcode)
-    {
-        ib.rawBuilder().toInsnList().add(generate(context, opcode));
-    }
+    public abstract void generate(AdvInsnBuilder ib, InterpretContext context, Opcs opcode);
 
     public boolean term(Opcs opcode)
     {
         return false;
     }
 
-    protected static void popObject(InsnBuilder ib, InterpretContext context)
-    {
-        LabelNode objectValue = new LabelNode();
-        LabelNode longValue = new LabelNode();
-        LabelNode floatValue = new LabelNode();
-        LabelNode doubleValue = new LabelNode();
-        LabelNode done = new LabelNode();
-
-        emitRawPopIndexAndType(ib, context);
-        emitLoadAndClearBoxedStackValue(ib, context);
-
-        ib.iload(InterpretContext.STACK_TYPE);
-        ib.iconst1();
-        ib.ifIcmpNe(longValue);
-        loadStackWord(ib, context);
-        ib.l2i();
-        ib.invokeStatic("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;");
-        ib.goto_(done);
-
-        ib.label(longValue);
-        ib.iload(InterpretContext.STACK_TYPE);
-        ib.iconst2();
-        ib.ifIcmpNe(floatValue);
-        loadStackWord(ib, context);
-        ib.invokeStatic("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
-        ib.goto_(done);
-
-        ib.label(floatValue);
-        ib.iload(InterpretContext.STACK_TYPE);
-        ib.iconst3();
-        ib.ifIcmpNe(doubleValue);
-        loadStackWord(ib, context);
-        ib.l2i();
-        ib.invokeStatic("java/lang/Float", "intBitsToFloat", "(I)F");
-        ib.invokeStatic("java/lang/Float", "valueOf", "(F)Ljava/lang/Float;");
-        ib.goto_(done);
-
-        ib.label(doubleValue);
-        ib.iload(InterpretContext.STACK_TYPE);
-        ib.iconst4();
-        ib.ifIcmpNe(objectValue);
-        loadStackWord(ib, context);
-        ib.invokeStatic("java/lang/Double", "longBitsToDouble", "(J)D");
-        ib.invokeStatic("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;");
-        ib.goto_(done);
-
-        ib.label(objectValue);
-        ib.aload(InterpretContext.STACK_OBJECT);
-
-        ib.label(done);
-    }
-
     protected static void popObject(AdvInsnBuilder ib, InterpretContext context)
     {
-        popObject(ib.rawBuilder(), context);
-    }
-
-    protected static void popObject(InsnBuilder ib, InterpretContext context, int local)
-    {
-        popObject(ib, context);
-        ib.astore(local);
+        popObject(ib, context, context.stackObject());
     }
 
     protected static void popObject(AdvInsnBuilder ib, InterpretContext context, int local)
     {
-        popObject(ib.rawBuilder(), context, local);
+        popObject(ib, context, context.localForSlot("object" + local, local));
     }
 
-    protected static void popNumber(InsnBuilder ib, InterpretContext context, NumericType type)
+    protected static void popObject(AdvInsnBuilder ib, InterpretContext context, Local target)
     {
-        LabelNode boxed = new LabelNode();
-        LabelNode done = new LabelNode();
+        popIndexAndType(ib, context);
+        loadAndClearBoxedStackValue(ib, context);
 
-        emitRawPopIndexAndType(ib, context);
-        ib.iload(InterpretContext.STACK_TYPE);
-        ib.pushInt(typeTag(type));
-        ib.ifIcmpNe(boxed);
+        ib.ifElse(
+                AdvInsnBuilder.equal(context.stackType(), AdvInsnBuilder.constant(typeTag(NumericType.INT))),
+                b -> b.set(context.stackObject(), NumericType.INT.box(wordAs(NumericType.INT, stackWord(context)))),
+                b -> b.ifElse(
+                        AdvInsnBuilder.equal(context.stackType(), AdvInsnBuilder.constant(typeTag(NumericType.LONG))),
+                        bb -> bb.set(context.stackObject(), NumericType.LONG.box(wordAs(NumericType.LONG, stackWord(context)))),
+                        bb -> bb.ifElse(
+                                AdvInsnBuilder.equal(context.stackType(), AdvInsnBuilder.constant(typeTag(NumericType.FLOAT))),
+                                bbb -> bbb.set(context.stackObject(), NumericType.FLOAT.box(wordAs(NumericType.FLOAT, stackWord(context)))),
+                                bbb -> bbb.ifCondition(
+                                        AdvInsnBuilder.equal(context.stackType(), AdvInsnBuilder.constant(typeTag(NumericType.DOUBLE))),
+                                        number -> number.set(context.stackObject(), NumericType.DOUBLE.box(wordAs(NumericType.DOUBLE, stackWord(context))))))));
 
-        loadStackWord(ib, context);
-        switch (type)
-        {
-            case INT -> ib.l2i();
-            case LONG -> { }
-            case FLOAT ->
-            {
-                ib.l2i();
-                ib.invokeStatic("java/lang/Float", "intBitsToFloat", "(I)F");
-            }
-            case DOUBLE -> ib.invokeStatic("java/lang/Double", "longBitsToDouble", "(J)D");
-        }
-        ib.goto_(done);
+        ib.set(target, context.stackObject());
+    }
 
-        ib.label(boxed);
-        emitLoadAndClearBoxedStackValue(ib, context);
-        ib.aload(InterpretContext.STACK_OBJECT);
-        type.unbox(ib);
-
-        ib.label(done);
+    protected static void popObjectAndWidth(AdvInsnBuilder ib, InterpretContext context, int valueLocal, int widthLocal)
+    {
+        ib.set(
+                context.intLocal("width" + widthLocal, widthLocal),
+                AdvInsnBuilder.arrayAt(
+                        context.stackWidths(),
+                        AdvInsnBuilder.minus(context.frameField(context.frame.stackPointer), AdvInsnBuilder.constant(1))));
+        popObject(ib, context, valueLocal);
     }
 
     protected static void popNumber(AdvInsnBuilder ib, InterpretContext context, NumericType type)
     {
-        popNumber(ib.rawBuilder(), context, type);
-    }
-
-    protected static void popNumber(InsnBuilder ib, InterpretContext context, NumericType type, int local)
-    {
-        popNumber(ib, context, type);
-        type.store(ib, local);
+        popNumber(ib, context, type, context.rightValue(type));
     }
 
     protected static void popNumber(AdvInsnBuilder ib, InterpretContext context, NumericType type, int local)
     {
-        popNumber(ib.rawBuilder(), context, type, local);
+        popNumber(ib, context, type, context.local("number" + local, type.descriptor(), local));
     }
 
-    protected static void popInt(InsnBuilder ib, InterpretContext context)
+    protected static void popNumber(AdvInsnBuilder ib, InterpretContext context, NumericType type, Local target)
+    {
+        popIndexAndType(ib, context);
+        ib.ifElse(
+                AdvInsnBuilder.equal(context.stackType(), AdvInsnBuilder.constant(typeTag(type))),
+                direct -> direct.set(target, wordAs(type, stackWord(context))),
+                boxed -> {
+                    loadAndClearBoxedStackValue(boxed, context);
+                    boxed.set(target, type.unbox(context.stackObject()));
+                });
+    }
+
+    protected static void popInt(AdvInsnBuilder ib, InterpretContext context)
     {
         popNumber(ib, context, NumericType.INT);
     }
 
-    protected static void popInt(InsnBuilder ib, InterpretContext context, int local)
+    protected static void popInt(AdvInsnBuilder ib, InterpretContext context, int local)
     {
         popNumber(ib, context, NumericType.INT, local);
     }
 
-    protected static void popLong(InsnBuilder ib, InterpretContext context)
-    {
-        popNumber(ib, context, NumericType.LONG);
-    }
-
-    protected static void popLong(InsnBuilder ib, InterpretContext context, int local)
+    protected static void popLong(AdvInsnBuilder ib, InterpretContext context, int local)
     {
         popNumber(ib, context, NumericType.LONG, local);
     }
 
-    protected static void popFloat(InsnBuilder ib, InterpretContext context)
-    {
-        popNumber(ib, context, NumericType.FLOAT);
-    }
-
-    protected static void popFloat(InsnBuilder ib, InterpretContext context, int local)
+    protected static void popFloat(AdvInsnBuilder ib, InterpretContext context, int local)
     {
         popNumber(ib, context, NumericType.FLOAT, local);
     }
 
-    protected static void popDouble(InsnBuilder ib, InterpretContext context)
-    {
-        popNumber(ib, context, NumericType.DOUBLE);
-    }
-
-    protected static void popDouble(InsnBuilder ib, InterpretContext context, int local)
+    protected static void popDouble(AdvInsnBuilder ib, InterpretContext context, int local)
     {
         popNumber(ib, context, NumericType.DOUBLE, local);
     }
 
-    /** Pushes the Object currently on top of the generated JVM operand stack. */
-    protected static void pushObject(InsnBuilder ib, InterpretContext context)
-    {
-        pushObjectWithWidth(ib, context, 1);
-    }
-
     protected static void pushObject(AdvInsnBuilder ib, InterpretContext context)
     {
-        pushObject(ib.rawBuilder(), context);
-    }
-
-    protected static void pushObjectWithWidth(
-            InsnBuilder ib,
-            InterpretContext context,
-            int width)
-    {
-        ib.astore(InterpretContext.STACK_OBJECT);
-        emitPushObjectWithConstantWidth(ib, context, InterpretContext.STACK_OBJECT, width);
-    }
-
-    protected static void pushObjectWithWidth(
-            AdvInsnBuilder ib,
-            InterpretContext context,
-            int width)
-    {
-        pushObjectWithWidth(ib.rawBuilder(), context, width);
-    }
-
-    protected static void pushObject(InsnBuilder ib, InterpretContext context, int local)
-    {
-        ib.aload(local);
-        pushObject(ib, context);
+        pushObject(ib, context, context.stackObject());
     }
 
     protected static void pushObject(AdvInsnBuilder ib, InterpretContext context, int local)
     {
-        pushObject(ib.rawBuilder(), context, local);
+        pushObject(ib, context, context.localForSlot("object" + local, local));
     }
 
-    protected static void pushObjectWithWidth(
-            InsnBuilder ib,
-            InterpretContext context,
-            int objectLocal,
-            int widthLocal)
+    protected static void pushObject(AdvInsnBuilder ib, InterpretContext context, Expr value)
     {
-        emitPushObjectPrefix(ib, context, objectLocal);
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stackWidths.get(ib);
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stackPointer.get(ib);
-        ib.iload(widthLocal);
-        ib.iastore();
-        emitPushSuffix(ib, context);
+        pushObjectWithWidth(ib, context, value, AdvInsnBuilder.constant(1));
     }
 
-    /** Boxes and pushes the primitive currently on top of the JVM operand stack. */
-    protected static void pushNumber(InsnBuilder ib, InterpretContext context, NumericType type)
+    protected static void pushObjectWithWidth(AdvInsnBuilder ib, InterpretContext context, int local, int widthLocal)
     {
-        type.store(ib, InterpretContext.RIGHT_VALUE);
-        emitPushWordPrefix(ib, context);
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stackWords.get(ib);
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stackPointer.get(ib);
-        type.load(ib, InterpretContext.RIGHT_VALUE);
-        switch (type)
-        {
-            case INT -> ib.i2l();
-            case LONG -> { }
-            case FLOAT ->
-            {
-                ib.invokeStatic("java/lang/Float", "floatToRawIntBits", "(F)I");
-                ib.i2l();
-            }
-            case DOUBLE -> ib.invokeStatic("java/lang/Double", "doubleToRawLongBits", "(D)J");
-        }
-        ib.lastore();
-        emitPushWordSuffix(ib, context, type);
+        pushObjectWithWidth(
+                ib,
+                context,
+                context.localForSlot("object" + local, local),
+                context.intLocal("width" + widthLocal, widthLocal));
+    }
+
+    protected static void pushObjectWithWidth(AdvInsnBuilder ib, InterpretContext context, int width)
+    {
+        pushObjectWithWidth(ib, context, context.stackObject(), AdvInsnBuilder.constant(width));
+    }
+
+    protected static void pushObjectWithWidth(AdvInsnBuilder ib, InterpretContext context, Expr value, Expr width)
+    {
+        ib.setArray(context.stack(), context.frameField(context.frame.stackPointer), value);
+        ib.setArray(context.stackTypes(), context.frameField(context.frame.stackPointer), AdvInsnBuilder.constant(0));
+        ib.setArray(context.stackWidths(), context.frameField(context.frame.stackPointer), width);
+        incrementStackPointer(ib, context);
     }
 
     protected static void pushNumber(AdvInsnBuilder ib, InterpretContext context, NumericType type)
     {
-        pushNumber(ib.rawBuilder(), context, type);
+        pushNumber(ib, context, type, context.rightValue(type));
     }
 
-    protected static void pushNumber(InsnBuilder ib, InterpretContext context, NumericType type, int local)
+    protected static void pushNumber(AdvInsnBuilder ib, InterpretContext context, NumericType type, int local)
     {
-        type.load(ib, local);
-        pushNumber(ib, context, type);
+        pushNumber(ib, context, type, context.local("number" + local, type.descriptor(), local));
     }
 
-    protected static void pushInt(InsnBuilder ib, InterpretContext context)
+    protected static void pushNumber(AdvInsnBuilder ib, InterpretContext context, NumericType type, Expr value)
+    {
+        ib.setArray(context.stack(), context.frameField(context.frame.stackPointer), AdvInsnBuilder.nullValue("java/lang/Object"));
+        ib.setArray(context.stackWords(), context.frameField(context.frame.stackPointer), wordFrom(type, value));
+        ib.setArray(context.stackTypes(), context.frameField(context.frame.stackPointer), AdvInsnBuilder.constant(typeTag(type)));
+        ib.setArray(context.stackWidths(), context.frameField(context.frame.stackPointer), AdvInsnBuilder.constant(type.stackWidth()));
+        incrementStackPointer(ib, context);
+    }
+
+    protected static void pushInt(AdvInsnBuilder ib, InterpretContext context)
     {
         pushNumber(ib, context, NumericType.INT);
     }
 
-    protected static void pushInt(InsnBuilder ib, InterpretContext context, int local)
+    protected static void pushInt(AdvInsnBuilder ib, InterpretContext context, int local)
     {
         pushNumber(ib, context, NumericType.INT, local);
     }
 
-    protected static void pushLong(InsnBuilder ib, InterpretContext context)
+    protected static void pushInt(AdvInsnBuilder ib, InterpretContext context, Expr value)
     {
-        pushNumber(ib, context, NumericType.LONG);
+        pushNumber(ib, context, NumericType.INT, value);
     }
 
-    protected static void pushLong(InsnBuilder ib, InterpretContext context, int local)
+    protected static void pushLong(AdvInsnBuilder ib, InterpretContext context, int local)
     {
         pushNumber(ib, context, NumericType.LONG, local);
     }
 
-    protected static void pushFloat(InsnBuilder ib, InterpretContext context)
+    protected static void pushLong(AdvInsnBuilder ib, InterpretContext context, Expr value)
     {
-        pushNumber(ib, context, NumericType.FLOAT);
+        pushNumber(ib, context, NumericType.LONG, value);
     }
 
-    protected static void pushFloat(InsnBuilder ib, InterpretContext context, int local)
+    protected static void pushFloat(AdvInsnBuilder ib, InterpretContext context, int local)
     {
         pushNumber(ib, context, NumericType.FLOAT, local);
     }
 
-    protected static void pushDouble(InsnBuilder ib, InterpretContext context)
+    protected static void pushFloat(AdvInsnBuilder ib, InterpretContext context, Expr value)
     {
-        pushNumber(ib, context, NumericType.DOUBLE);
+        pushNumber(ib, context, NumericType.FLOAT, value);
     }
 
-    protected static void pushDouble(InsnBuilder ib, InterpretContext context, int local)
+    protected static void pushDouble(AdvInsnBuilder ib, InterpretContext context, int local)
     {
         pushNumber(ib, context, NumericType.DOUBLE, local);
     }
 
-    protected static void jumpIfCategory2(InsnBuilder ib, int widthLocal, LabelNode target)
+    protected static void pushDouble(AdvInsnBuilder ib, InterpretContext context, Expr value)
     {
-        ib.iload(widthLocal);
-        ib.iconst2();
-        ib.ifIcmpEq(target);
+        pushNumber(ib, context, NumericType.DOUBLE, value);
     }
 
-    private static void emitPushObjectWithConstantWidth(
-            InsnBuilder ib,
-            InterpretContext context,
-            int objectLocal,
-            int width)
+    protected static void jumpIfCategory2(AdvInsnBuilder ib, Expr width, LabelNode target)
     {
-        emitPushObjectPrefix(ib, context, objectLocal);
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stackWidths.get(ib);
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stackPointer.get(ib);
-        ib.pushInt(width);
-        ib.iastore();
-        emitPushSuffix(ib, context);
+        ib.jumpIf(AdvInsnBuilder.equal(width, AdvInsnBuilder.constant(2)), target);
     }
 
-    private static void emitPushObjectPrefix(
-            InsnBuilder ib,
-            InterpretContext context,
-            int objectLocal)
-    {
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stack.get(ib);
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stackPointer.get(ib);
-        ib.aload(objectLocal);
-        ib.aastore();
-
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stackTypes.get(ib);
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stackPointer.get(ib);
-        ib.iconst0();
-        ib.iastore();
-    }
-
-    private static void emitPushWordPrefix(
-            InsnBuilder ib,
-            InterpretContext context)
-    {
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stack.get(ib);
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stackPointer.get(ib);
-        ib.aconstNull();
-        ib.aastore();
-    }
-
-    private static void emitPushWordSuffix(
-            InsnBuilder ib,
-            InterpretContext context,
-            NumericType type)
-    {
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stackTypes.get(ib);
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stackPointer.get(ib);
-        ib.pushInt(typeTag(type));
-        ib.iastore();
-
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stackWidths.get(ib);
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stackPointer.get(ib);
-        ib.pushInt(type.stackWidth());
-        ib.iastore();
-
-        emitPushSuffix(ib, context);
-    }
-
-    private static void emitPushSuffix(
-            InsnBuilder ib,
-            InterpretContext context)
-    {
-        ib.aload(InterpretContext.FRAME);
-        ib.dup();
-        context.frame.stackPointer.get(ib);
-        ib.iconst1();
-        ib.iadd();
-        context.frame.stackPointer.put(ib);
-    }
-
-    private static void emitRawPopIndexAndType(
-            InsnBuilder ib,
-            InterpretContext context)
-    {
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stackPointer.get(ib);
-        ib.iconst1();
-        ib.isub();
-        ib.istore(InterpretContext.STACK_INDEX);
-
-        ib.aload(InterpretContext.FRAME);
-        ib.iload(InterpretContext.STACK_INDEX);
-        context.frame.stackPointer.put(ib);
-
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stackTypes.get(ib);
-        ib.iload(InterpretContext.STACK_INDEX);
-        ib.iaload();
-        ib.istore(InterpretContext.STACK_TYPE);
-
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stackTypes.get(ib);
-        ib.iload(InterpretContext.STACK_INDEX);
-        ib.iconst0();
-        ib.iastore();
-
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stackWidths.get(ib);
-        ib.iload(InterpretContext.STACK_INDEX);
-        ib.iconst0();
-        ib.iastore();
-    }
-
-    private static void emitLoadAndClearBoxedStackValue(
-            InsnBuilder ib,
-            InterpretContext context)
-    {
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stack.get(ib);
-        ib.iload(InterpretContext.STACK_INDEX);
-        ib.aaload();
-        ib.astore(InterpretContext.STACK_OBJECT);
-
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stack.get(ib);
-        ib.iload(InterpretContext.STACK_INDEX);
-        ib.aconstNull();
-        ib.aastore();
-    }
-
-    private static void loadStackWord(
-            InsnBuilder ib,
-            InterpretContext context)
-    {
-        ib.aload(InterpretContext.FRAME);
-        context.frame.stackWords.get(ib);
-        ib.iload(InterpretContext.STACK_INDEX);
-        ib.laload();
-    }
-
-    private static int typeTag(NumericType type)
+    protected static int typeTag(NumericType type)
     {
         return switch (type)
         {
@@ -469,5 +222,52 @@ public abstract class InterpretBranch
             case FLOAT -> 3;
             case DOUBLE -> 4;
         };
+    }
+
+    private static void popIndexAndType(AdvInsnBuilder ib, InterpretContext context)
+    {
+        ib.set(context.stackIndex(), AdvInsnBuilder.minus(context.frameField(context.frame.stackPointer), AdvInsnBuilder.constant(1)));
+        ib.set(context.frameField(context.frame.stackPointer), context.stackIndex());
+        ib.set(context.stackType(), AdvInsnBuilder.arrayAt(context.stackTypes(), context.stackIndex()));
+        ib.setArray(context.stackTypes(), context.stackIndex(), AdvInsnBuilder.constant(0));
+        ib.setArray(context.stackWidths(), context.stackIndex(), AdvInsnBuilder.constant(0));
+    }
+
+    private static void loadAndClearBoxedStackValue(AdvInsnBuilder ib, InterpretContext context)
+    {
+        ib.set(context.stackObject(), AdvInsnBuilder.arrayAt(context.stack(), context.stackIndex()));
+        ib.setArray(context.stack(), context.stackIndex(), AdvInsnBuilder.nullValue("java/lang/Object"));
+    }
+
+    private static Expr stackWord(InterpretContext context)
+    {
+        return AdvInsnBuilder.arrayAt(context.stackWords(), context.stackIndex());
+    }
+
+    private static Expr wordAs(NumericType type, Expr word)
+    {
+        return switch (type)
+        {
+            case INT -> AdvInsnBuilder.cast(word, "I");
+            case LONG -> word;
+            case FLOAT -> AdvInsnBuilder.callStatic("java/lang/Float", "intBitsToFloat", "F", AdvInsnBuilder.cast(word, "I"));
+            case DOUBLE -> AdvInsnBuilder.callStatic("java/lang/Double", "longBitsToDouble", "D", word);
+        };
+    }
+
+    private static Expr wordFrom(NumericType type, Expr value)
+    {
+        return switch (type)
+        {
+            case INT -> AdvInsnBuilder.cast(value, "J");
+            case LONG -> value;
+            case FLOAT -> AdvInsnBuilder.cast(AdvInsnBuilder.callStatic("java/lang/Float", "floatToRawIntBits", "I", value), "J");
+            case DOUBLE -> AdvInsnBuilder.callStatic("java/lang/Double", "doubleToRawLongBits", "J", value);
+        };
+    }
+
+    private static void incrementStackPointer(AdvInsnBuilder ib, InterpretContext context)
+    {
+        ib.set(context.frameField(context.frame.stackPointer), AdvInsnBuilder.plus(context.frameField(context.frame.stackPointer), AdvInsnBuilder.constant(1)));
     }
 }

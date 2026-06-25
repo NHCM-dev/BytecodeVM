@@ -7,7 +7,6 @@ import nhcm.bytecodevm.AdvInsn.Local;
 import nhcm.bytecodevm.Generator.GlobalClass.MethodFrameLayout;
 import nhcm.bytecodevm.Generator.Virtualization.VMRuntimeLayout;
 import nhcm.bytecodevm.Utils.Builder.FieldRef;
-import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
 import org.objectweb.asm.tree.LabelNode;
 
 public final class InterpretContext
@@ -87,7 +86,7 @@ public final class InterpretContext
     {
         if (programClassName == null)
         {
-            throw new IllegalStateException("programClassName is required for AdvInsnBuilder program() access");
+            throw new IllegalStateException("programClassName is required for program() access");
         }
         return AdvInsnBuilder.local("program", programClassName, PROGRAM);
     }
@@ -109,27 +108,99 @@ public final class InterpretContext
 
     public Local opcode()
     {
-        return AdvInsnBuilder.local("opcode", "I", OPCODE);
+        return intLocal("opcode", OPCODE);
+    }
+
+    public Local rightValue(NumericType type)
+    {
+        return local("rightValue", type.descriptor(), RIGHT_VALUE);
+    }
+
+    public Local leftValue(NumericType type)
+    {
+        return local("leftValue", type.descriptor(), LEFT_VALUE);
+    }
+
+    public Local middleValue()
+    {
+        return intLocal("middleValue", MIDDLE_VALUE);
+    }
+
+    public Local objectLocal(String name, int slot)
+    {
+        return local(name, "java/lang/Object", slot);
+    }
+
+    public Local intLocal(String name, int slot)
+    {
+        return local(name, "I", slot);
+    }
+
+    public Local longLocal(String name, int slot)
+    {
+        return local(name, "J", slot);
+    }
+
+    public Local floatLocal(String name, int slot)
+    {
+        return local(name, "F", slot);
+    }
+
+    public Local doubleLocal(String name, int slot)
+    {
+        return local(name, "D", slot);
+    }
+
+    public Local local(String name, String type, int slot)
+    {
+        return AdvInsnBuilder.local(name, type, slot);
+    }
+
+    public Local localForSlot(String name, int slot)
+    {
+        return switch (slot)
+        {
+            case ARRAY_LENGTHS -> local(name, "[I", slot);
+            case ARRAY_COMPONENT, INVOKE_RETURN_TYPE -> local(name, "java/lang/Class", slot);
+            case INVOKE_TYPE -> local(name, "java/lang/invoke/MethodType", slot);
+            case INVOKE_ARGUMENTS -> local(name, "[Ljava/lang/Object;", slot);
+            default -> objectLocal(name, slot);
+        };
     }
 
     public Local exceptionHandlers()
     {
-        return AdvInsnBuilder.local("exceptionHandlers", "[I", EXCEPTION_HANDLERS);
+        return local("exceptionHandlers", "[I", EXCEPTION_HANDLERS);
     }
 
     public Local instructionPc()
     {
-        return AdvInsnBuilder.local("instructionPc", "I", INSTRUCTION_PC);
+        return intLocal("instructionPc", INSTRUCTION_PC);
     }
 
     public Local thrown()
     {
-        return AdvInsnBuilder.local("thrown", "java/lang/Throwable", THROWN);
+        return local("thrown", "java/lang/Throwable", THROWN);
     }
 
     public Local handlerPc()
     {
-        return AdvInsnBuilder.local("handlerPc", "I", HANDLER_PC);
+        return intLocal("handlerPc", HANDLER_PC);
+    }
+
+    public Local stackIndex()
+    {
+        return intLocal("stackIndex", STACK_INDEX);
+    }
+
+    public Local stackType()
+    {
+        return intLocal("stackType", STACK_TYPE);
+    }
+
+    public Local stackObject()
+    {
+        return objectLocal("stackObject", STACK_OBJECT);
     }
 
     public FieldAccess frameField(FieldRef field)
@@ -152,50 +223,58 @@ public final class InterpretContext
         return frameField(frame.returnValue);
     }
 
+    public Expr locals()
+    {
+        return frameField(frame.locals);
+    }
+
+    public Expr stack()
+    {
+        return frameField(frame.stack);
+    }
+
+    public Expr stackTypes()
+    {
+        return frameField(frame.stackTypes);
+    }
+
+    public Expr stackWidths()
+    {
+        return frameField(frame.stackWidths);
+    }
+
+    public Expr stackWords()
+    {
+        return frameField(frame.stackWords);
+    }
+
     public Expr tokenAtProgramCounter()
     {
         return AdvInsnBuilder.arrayAt(code(), frameProgramCounter());
+    }
+
+    public Expr constantString(Expr index)
+    {
+        return AdvInsnBuilder.callStatic(
+                vm.owner,
+                vm.constantString.name(),
+                "java/lang/String",
+                constants(),
+                index);
+    }
+
+    public Expr loadClass(Expr className)
+    {
+        return AdvInsnBuilder.callStatic(
+                vm.owner,
+                vm.loadOwner.name(),
+                "java/lang/Class",
+                className);
     }
 
     public void nextToken(AdvInsnBuilder ib, Local target)
     {
         ib.set(target, tokenAtProgramCounter());
         ib.set(frameProgramCounter(), AdvInsnBuilder.plus(frameProgramCounter(), AdvInsnBuilder.constant(1)));
-    }
-
-    public void loadFrame(InsnBuilder ib)
-    {
-        ib.aload(FRAME);
-    }
-
-    public void popObject(InsnBuilder ib)
-    {
-        loadFrame(ib);
-        frame.pop.invokeVirtual(ib);
-    }
-
-    public void popNumber(InsnBuilder ib, NumericType type, int local)
-    {
-        popObject(ib);
-        type.unbox(ib);
-        type.store(ib, local);
-    }
-
-    public void invokeFramePush(InsnBuilder ib)
-    {
-        frame.push.invokeVirtual(ib);
-    }
-
-    public void nextToken(InsnBuilder ib)
-    {
-        ib.aload(CODE);
-        loadFrame(ib);
-        ib.dup();
-        frame.programCounter.get(ib);
-        ib.dupX1();
-        ib.iconst1();
-        ib.iadd();
-        frame.programCounter.put(ib);
-        ib.iaload();
     }
 }

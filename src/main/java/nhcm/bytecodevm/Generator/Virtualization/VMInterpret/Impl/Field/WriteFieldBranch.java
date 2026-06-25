@@ -1,11 +1,12 @@
 package nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Field;
 
+import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
+import nhcm.bytecodevm.AdvInsn.Expr;
+import nhcm.bytecodevm.AdvInsn.Local;
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Enums.VMOpcode;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.InterpretContext;
-import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
-import org.objectweb.asm.tree.InsnList;
 
 import java.util.Set;
 
@@ -18,53 +19,44 @@ public class WriteFieldBranch extends InterpretBranch
     }
 
     @Override
-    public InsnList generate(InterpretContext context, Opcs opcode)
+    public void generate(AdvInsnBuilder ib, InterpretContext context, Opcs opcode)
     {
-        InsnBuilder ib = new InsnBuilder();
+        Local owner = context.local("fieldOwner", "java/lang/String", InterpretContext.FIELD_OWNER);
+        Local name = context.local("fieldName", "java/lang/String", InterpretContext.FIELD_NAME);
+        Local descriptor = context.local("fieldDescriptor", "java/lang/String", InterpretContext.FIELD_DESCRIPTOR);
+        Local value = context.objectLocal("fieldValue", InterpretContext.FIELD_VALUE);
+        Local receiver = context.objectLocal("fieldReceiver", InterpretContext.FIELD_RECEIVER);
 
-        // value 一定处于 VM 栈顶
-        popObject(ib, context, InterpretContext.FIELD_VALUE);
-
+        popObject(ib, context, value);
         if (opcode == Opcs.PUTSTATIC)
         {
-            ib.aconstNull();
-            ib.astore(InterpretContext.FIELD_RECEIVER);
+            ib.set(receiver, AdvInsnBuilder.nullValue("java/lang/Object"));
         }
         else
         {
-            popObject(
-                    ib,
-                    context,
-                    InterpretContext.FIELD_RECEIVER);
+            popObject(ib, context, receiver);
         }
 
-        readConstantString(ib, context);
-        readConstantString(ib, context);
-        readConstantString(ib, context);
+        ib.set(owner, readConstantString(ib, context));
+        ib.set(name, readConstantString(ib, context));
+        ib.set(descriptor, readConstantString(ib, context));
 
-        if (opcode == Opcs.PUTSTATIC)
-        {
-            ib.iconst1();
-        }
-        else
-        {
-            ib.iconst0();
-        }
-
-        ib.aload(InterpretContext.FIELD_RECEIVER);
-        ib.aload(InterpretContext.FIELD_VALUE);
-
-        context.vm.setField.invokeStatic(ib);
-
-        return ib.toInsnList();
+        ib.directCall(AdvInsnBuilder.callStatic(
+                context.vm.owner,
+                context.vm.setField.name(),
+                "V",
+                owner,
+                name,
+                descriptor,
+                AdvInsnBuilder.constant(opcode == Opcs.PUTSTATIC),
+                receiver,
+                value));
     }
 
-    private static void readConstantString(
-            InsnBuilder ib,
-            InterpretContext context)
+    private static Expr readConstantString(AdvInsnBuilder ib, InterpretContext context)
     {
-        ib.aload(InterpretContext.CONSTANTS);
-        context.nextToken(ib);
-        context.vm.constantString.invokeStatic(ib);
+        Local token = context.intLocal("fieldToken", InterpretContext.JUMP_TARGET);
+        context.nextToken(ib, token);
+        return context.constantString(token);
     }
 }
