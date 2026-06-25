@@ -1,5 +1,6 @@
 package nhcm.bytecodevm.Utils;
 
+import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
 import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.LabelNode;
@@ -11,6 +12,11 @@ public class TypeUtils
     {
         load(builder, type, localIndex);
         box(builder, type);
+    }
+
+    public static void loadAndBox(AdvInsnBuilder builder, Type type, int localIndex)
+    {
+        loadAndBox(builder.rawBuilder(), type, localIndex);
     }
 
     public static void load(InsnBuilder builder, Type type, int localIndex)
@@ -45,6 +51,11 @@ public class TypeUtils
             default:
                 throw new IllegalArgumentException(type.toString());
         }
+    }
+
+    public static void load(AdvInsnBuilder builder, Type type, int localIndex)
+    {
+        load(builder.rawBuilder(), type, localIndex);
     }
 
     public static void box(InsnBuilder builder, Type type)
@@ -92,6 +103,11 @@ public class TypeUtils
         }
     }
 
+    public static void box(AdvInsnBuilder builder, Type type)
+    {
+        box(builder.rawBuilder(), type);
+    }
+
     public static void unbox(
             InsnBuilder builder,
             Type type)
@@ -131,6 +147,13 @@ public class TypeUtils
         }
     }
 
+    public static void unbox(
+            AdvInsnBuilder builder,
+            Type type)
+    {
+        unbox(builder.rawBuilder(), type);
+    }
+
     public static void unboxIntLike(InsnBuilder builder)
     {
         LabelNode notBoolean = new LabelNode();
@@ -157,6 +180,11 @@ public class TypeUtils
         builder.invokeVirtual("java/lang/Number", "intValue", "()I");
 
         builder.label(done);
+    }
+
+    public static void unboxIntLike(AdvInsnBuilder builder)
+    {
+        unboxIntLike(builder.rawBuilder());
     }
 
     public static void returnValue(
@@ -190,5 +218,12 @@ public class TypeUtils
                 builder.ireturn();
                 break;
         }
+    }
+
+    public static void returnValue(
+            AdvInsnBuilder builder,
+            Type returnType)
+    {
+        returnValue(builder.rawBuilder(), returnType);
     }
 }

@@ -39,7 +39,6 @@ public class CodePoolGenerator extends ClassObj
     private final Map<Integer, Integer> maxLocalsIndexById;
     private final Map<Integer, Integer> maxStackIndexById;
     private final VMProgramGenerator vmProgramGenerator;
-    private final VMCodePoolGenerator vmCodePoolGenerator;
 
     public CodePoolGenerator(String className, List<CompiledMethod> compiledMethods, VMProgramGenerator vmProgramGenerator, VMCodePoolGenerator vmCodePoolGenerator)
     {
@@ -50,7 +49,6 @@ public class CodePoolGenerator extends ClassObj
     {
         super(className);
         this.vmProgramGenerator = vmProgramGenerator;
-        this.vmCodePoolGenerator = vmCodePoolGenerator;
         if (vmCodePoolGenerator.vmProgramGenerator != vmProgramGenerator)
         {
             throw new IllegalArgumentException("VMCodePoolGenerator uses a different VMProgramGenerator");
