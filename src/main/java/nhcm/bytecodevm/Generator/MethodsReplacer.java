@@ -1,5 +1,8 @@
 package nhcm.bytecodevm.Generator;
 
+import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
+import nhcm.bytecodevm.AdvInsn.Expr;
+import nhcm.bytecodevm.AdvInsn.Local;
 import nhcm.bytecodevm.Data.CompiledMethod;
 import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
 import nhcm.bytecodevm.Utils.MethodUtils;
@@ -39,68 +42,46 @@ public class MethodsReplacer
 
     private void replace(CompiledMethod compiledMethod)
     {
+        ClassNode owner = compiledMethod.owner;
         MethodNode method = compiledMethod.source;
         boolean isStatic = compiledMethod.isStatic;
+        int sourceLocal = isStatic ? 0 : 1;
         Type[] parameters = Type.getArgumentTypes(compiledMethod.descriptor);
 
-        InsnBuilder ib = new InsnBuilder();
-        ib.pushInt(compiledMethod.codeId);
-        if (isStatic)
-        {
-            ib.aconstNull();
-        }
-        else
-        {
-            ib.aload(0);
-        }
-
-        // execute copies this array directly into MethodFrame.locals. Keep JVM
-        // local-variable slots aligned, including the unused second slot of J/D.
-        int argumentSlots = 0;
-        for (Type parameter : parameters)
-        {
-            argumentSlots += parameter.getSize();
-        }
-        ib.pushInt(argumentSlots);
-        ib.aneArray("java/lang/Object");
-
-        int sourceLocal = isStatic ? 0 : 1;
-        int argumentSlot = 0;
-        for (Type parameter : parameters)
-        {
-            ib.dup();
-            ib.pushInt(argumentSlot);
-            TypeUtils.loadAndBox(ib, parameter, sourceLocal);
-            ib.aastore();
-            sourceLocal += parameter.getSize();
-            argumentSlot += parameter.getSize();
-        }
-
-        ib.invokeStatic(
-                vmClassName,
-                "execute",
-                "(ILjava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
-
-        Type returnType = Type.getReturnType(compiledMethod.descriptor);
-        if (returnType.getSort() == Type.VOID)
-        {
-            ib.pop();
-            ib._return();
-        }
-        else
-        {
-            TypeUtils.unbox(ib, returnType);
-            TypeUtils.returnValue(ib, returnType);
-        }
-
         method.instructions.clear();
-        method.instructions.add(ib.toInsnList());
         method.tryCatchBlocks.clear();
         method.localVariables = null;
         method.visibleLocalVariableAnnotations = null;
         method.invisibleLocalVariableAnnotations = null;
         method.maxStack = 0;
         method.maxLocals = sourceLocal;
+
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+
+        Type returnType = Type.getReturnType(method.desc);
+        Local argArray = ib.var("args", "[Ljava/lang/Object;");
+        ib.set(argArray, AdvInsnBuilder.newArray("java/lang/Object", AdvInsnBuilder.constant(parameters.length)));
+        for(int i = 0; i < parameters.length; i++)
+        {
+            Local value = ib.getLocal("DOES_NOT_MATTER" + i, parameters[i], sourceLocal + i);
+            ib.setArray(argArray, AdvInsnBuilder.constant(i), value);
+        }
+        Expr execute = AdvInsnBuilder.callStatic(
+                vmClassName,
+                "execute",
+                "Ljava/lang/Object;",
+                AdvInsnBuilder.constant(compiledMethod.codeId),
+                (isStatic ? AdvInsnBuilder.constant(null) : AdvInsnBuilder.self(owner.name)),
+                argArray
+        );
+        if(returnType.equals(Type.VOID_TYPE))
+        {
+            ib.directCall(execute);
+            ib.returnVoid();
+        } else
+        {
+            ib.returnValue(AdvInsnBuilder.cast(execute, returnType));
+        }
     }
 
     private static void validate(CompiledMethod compiledMethod)

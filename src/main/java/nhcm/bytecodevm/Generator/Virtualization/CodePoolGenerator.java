@@ -7,8 +7,8 @@ import nhcm.bytecodevm.Data.VMInsn.VMMethod;
 import nhcm.bytecodevm.Enums.Acc;
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Generator.Abstract.ClassObj;
-import nhcm.bytecodevm.Generator.GlobalTool.VMCodePoolGenerator;
-import nhcm.bytecodevm.Generator.GlobalTool.VMProgramGenerator;
+import nhcm.bytecodevm.Generator.GlobalClass.VMCodePoolGenerator;
+import nhcm.bytecodevm.Generator.GlobalClass.VMProgramGenerator;
 import nhcm.bytecodevm.Utils.*;
 import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
 import org.objectweb.asm.ConstantDynamic;
@@ -39,7 +39,6 @@ public class CodePoolGenerator extends ClassObj
     private final Map<Integer, Integer> maxLocalsIndexById;
     private final Map<Integer, Integer> maxStackIndexById;
     private final VMProgramGenerator vmProgramGenerator;
-    private final VMCodePoolGenerator vmCodePoolGenerator;
 
     public CodePoolGenerator(String className, List<CompiledMethod> compiledMethods, VMProgramGenerator vmProgramGenerator, VMCodePoolGenerator vmCodePoolGenerator)
     {
@@ -50,7 +49,6 @@ public class CodePoolGenerator extends ClassObj
     {
         super(className);
         this.vmProgramGenerator = vmProgramGenerator;
-        this.vmCodePoolGenerator = vmCodePoolGenerator;
         if (vmCodePoolGenerator.vmProgramGenerator != vmProgramGenerator)
         {
             throw new IllegalArgumentException("VMCodePoolGenerator uses a different VMProgramGenerator");
@@ -362,7 +360,7 @@ public class CodePoolGenerator extends ClassObj
             ib.getStatic(className(), "MAX_STACK", "[I");
             ib.pushInt(maxStackIndexById.get(codeId));
             ib.iaload();
-            ib.invokeSpecial(vmProgramGenerator.className(), "<init>", vmProgramGenerator.constructorDescriptor());
+            ib.invokeSpecial(vmProgramGenerator.className(), "<init>", vmProgramGenerator.layout.init.descriptor());
             ib.areturn();
         }
 

@@ -1,4 +1,4 @@
-package nhcm.bytecodevm.Generator.GlobalTool;
+package nhcm.bytecodevm.Generator.GlobalClass;
 
 import nhcm.bytecodevm.Utils.Builder.FieldRef;
 import nhcm.bytecodevm.Utils.Builder.MethodRef;
