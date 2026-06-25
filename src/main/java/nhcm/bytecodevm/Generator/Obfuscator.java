@@ -111,11 +111,183 @@ public class Obfuscator
         logger.info("{}", LogColors.success("Done virtualizing all classes"));
     }
 
+    private void processJar(JarTransformer.JarContext context)
+    {
+        logger.info("{}", LogColors.scan("Scanning input file for methods to obfuscate"));
+
+        String globalLocation = "BytecodeVM";
+
+        VMSetGenerator allInOneVm = newVMSetGenerator("BytecodeVM", "BytecodeVM");
+        List<VMSetGenerator> perClasses = new ArrayList<>();
+        List<VMSetGenerator> perMethods = new ArrayList<>();
+        Map<String, VMSetGenerator> perPackage = new LinkedHashMap<>();
+
+        Set<String> securityManagerClasses = securityManagerClasses(context.classes.values());
+
+        int matchedMethods = 0;
+
+        for(ClassNode classNode : context.classes.values())
+        {
+            if(!targetInclude.isClassMatched(classNode) || targetExclude.isClassMatched(classNode))
+            {
+                continue;
+            }
+
+            String classPackage = ClassUtils.getPackageName(classNode);
+            String vmLocation = getVMLocation(globalLocation, classPackage, classNode);
+
+            VMSetGenerator perClass = null;
+
+            if(config.createMode == BytecodeVMConfig.VMCreateMode.PER_CLASS)
+            {
+                perClass = newVMSetGenerator(
+                        ClassUtils.getSimpleName(classNode) + "$VM",
+                        vmLocation
+                );
+            }
+
+            Set<String> stackTraceSensitiveMethods = stackTraceSensitiveMethods(classNode);
+
+            for(MethodNode methodNode : classNode.methods)
+            {
+                if(shouldSkipMethod(
+                        classNode,
+                        methodNode,
+                        securityManagerClasses,
+                        stackTraceSensitiveMethods))
+                {
+                    continue;
+                }
+
+                matchedMethods++;
+
+                switch(config.createMode)
+                {
+                    case PER_CLASS ->
+                    {
+                        perClass.addMethod(methodNode, classNode);
+                    }
+
+                    case PER_METHOD ->
+                    {
+                        VMSetGenerator perMethod = newVMSetGenerator(
+                                ClassUtils.getSimpleName(classNode) + "$" + methodNode.name + "$VM",
+                                vmLocation
+                        );
+
+                        perMethod.addMethod(methodNode, classNode);
+                        perMethods.add(perMethod);
+                    }
+
+                    case PER_PACKAGE ->
+                    {
+                        VMSetGenerator generator = perPackage.computeIfAbsent(
+                                classPackage,
+                                ignored -> newVMSetGenerator(classPackage + "$VM", classPackage)
+                        );
+
+                        generator.addMethod(methodNode, classNode);
+                    }
+
+                    case ONE_FOR_ALL ->
+                    {
+                        allInOneVm.addMethod(methodNode, classNode);
+                    }
+                }
+            }
+
+            if(config.createMode == BytecodeVMConfig.VMCreateMode.PER_CLASS && perClass != null && perClass.hasMethods())
+            {
+                perClasses.add(perClass);
+            }
+        }
+
+        switch(config.createMode)
+        {
+            case PER_CLASS -> VMSetGenerators.addAll(perClasses);
+            case PER_METHOD -> VMSetGenerators.addAll(perMethods);
+            case PER_PACKAGE -> VMSetGenerators.addAll(perPackage.values());
+            case ONE_FOR_ALL ->
+            {
+                if(allInOneVm.hasMethods())
+                {
+                    VMSetGenerators.add(allInOneVm);
+                }
+            }
+        }
+
+        logger.info("{}", LogColors.scan(
+                "Scanned input file, found " +
+                LogColors.strong(matchedMethods) +
+                " method(s) across " +
+                LogColors.strong(VMSetGenerators.size()) +
+                " VM set(s)"
+        ));
+    }
+
+    private OpcMutator chooseMutator()
+    {
+        switch (config.mutateMode)
+        {
+            case ALL_RANDOM_INT:
+            {
+                return OpcMutator.MutateStrategy.RANDOM_INT.getMutator();
+            }
+            case ALL_RESORT:
+            {
+                return OpcMutator.MutateStrategy.RESORT.getMutator();
+            }
+            case ALL_AUTO_CHOOSE:
+            {
+                return OpcMutator.fromStrategy(RandomUtils.randomBoolean() ? OpcMutator.MutateStrategy.RANDOM_INT : OpcMutator.MutateStrategy.RESORT);
+            }
+            default:
+            {
+                return OpcMutator.MutateStrategy.NONE.getMutator();
+            }
+        }
+    }
+
+    private VMSetGenerator newVMSetGenerator(String name, String location)
+    {
+        return new VMSetGenerator(
+                name,
+                location,
+                chooseMutator(),
+                methodFrameGenerator,
+                vmProgramGenerator,
+                vmCodePoolGenerator,
+                config);
+    }
+
+    private String getVMLocation(String globalLocation, String classPackage, ClassNode classNode)
+    {
+        return switch(config.location)
+        {
+            case ONE_PACKAGE -> globalLocation;
+            case NEW_PACKAGE -> classPackage + "/" + classNode.name + "VM";
+            case SAME_PACKAGE_AS_TARGET -> classPackage;
+        };
+    }
+
+    private boolean shouldSkipMethod(
+            ClassNode classNode,
+            MethodNode methodNode,
+            Set<String> securityManagerClasses,
+            Set<String> stackTraceSensitiveMethods)
+    {
+        return securityManagerClasses.contains(classNode.name) ||
+               shouldIgnoreMethod(methodNode) ||
+               stackTraceSensitiveMethods.contains(methodKey(methodNode)) ||
+               !targetInclude.isMethodMatched(classNode, methodNode) ||
+               targetExclude.isMethodMatched(classNode, methodNode);
+    }
+
     private static boolean shouldIgnoreMethod(MethodNode methodNode)
     {
         return MethodUtils.isAbstract(methodNode) ||
-                MethodUtils.isNative(methodNode) ||
-                usesStackTraceIntrospection(methodNode);
+               MethodUtils.isNative(methodNode) ||
+               usesStackTraceIntrospection(methodNode);
     }
 
     private static String methodKey(MethodNode methodNode)
@@ -165,7 +337,7 @@ public class Obfuscator
                 continue;
             }
             if (classNode.name.equals(methodInsn.owner) &&
-                    sensitiveMethods.contains(methodInsn.name + methodInsn.desc))
+                sensitiveMethods.contains(methodInsn.name + methodInsn.desc))
             {
                 return true;
             }
@@ -224,14 +396,14 @@ public class Obfuscator
                 continue;
             }
             if ("java/lang/Throwable".equals(methodInsn.owner) &&
-                    "getStackTrace".equals(methodInsn.name) &&
-                    "()[Ljava/lang/StackTraceElement;".equals(methodInsn.desc))
+                "getStackTrace".equals(methodInsn.name) &&
+                "()[Ljava/lang/StackTraceElement;".equals(methodInsn.desc))
             {
                 return true;
             }
             if ("java/lang/Thread".equals(methodInsn.owner) &&
-                    "getStackTrace".equals(methodInsn.name) &&
-                    "()[Ljava/lang/StackTraceElement;".equals(methodInsn.desc))
+                "getStackTrace".equals(methodInsn.name) &&
+                "()[Ljava/lang/StackTraceElement;".equals(methodInsn.desc))
             {
                 return true;
             }
@@ -241,152 +413,5 @@ public class Obfuscator
             }
         }
         return false;
-    }
-
-    private void processJar(JarTransformer.JarContext context)
-    {
-        logger.info("{}", LogColors.scan("Scanning input file for methods to obfuscate"));
-        String globalLocation = "BytecodeVM";
-        VMSetGenerator allInOneVm = newVMSetGenerator("BytecodeVM", "BytecodeVM");
-        List<VMSetGenerator> perClasses = new ArrayList<>();
-        List<VMSetGenerator> perMethods = new ArrayList<>();
-        Map<String, VMSetGenerator> perPackage = new LinkedHashMap<>();
-        Set<String> securityManagerClasses = securityManagerClasses(context.classes.values());
-        int matchedMethods = 0;
-        for (ClassNode classNode : context.classes.values())
-        {
-            if(!targetInclude.isClassMatched(classNode))
-            {
-                continue;
-            }
-            if(targetExclude.isClassMatched(classNode))
-            {
-                continue;
-            }
-            String classPackage = ClassUtils.getPackageName(classNode);
-            String VMlocation = globalLocation;
-            switch (config.location)
-            {
-                case ONE_PACKAGE -> VMlocation = globalLocation;
-                case NEW_PACKAGE -> VMlocation = classPackage + "/" + classNode.name + "VM";
-                case SAME_PACKAGE_AS_TARGET -> VMlocation = classPackage;
-            }
-            VMSetGenerator perClass = newVMSetGenerator(
-                    ClassUtils.getSimpleName(classNode) + "$VM",
-                    VMlocation);
-            if(config.createMode == BytecodeVMConfig.VMCreateMode.PER_CLASS)
-            {
-                perClasses.add(perClass);
-            }
-            Set<String> stackTraceSensitiveMethods = stackTraceSensitiveMethods(classNode);
-            for(MethodNode methodNode : classNode.methods)
-            {
-                if(securityManagerClasses.contains(classNode.name) ||
-                        shouldIgnoreMethod(methodNode) ||
-                        stackTraceSensitiveMethods.contains(methodKey(methodNode)))
-                {
-                    continue;
-                }
-                if(!targetInclude.isMethodMatched(classNode, methodNode))
-                {
-                    continue;
-                }
-                if(targetExclude.isMethodMatched(classNode, methodNode))
-                {
-                    continue;
-                }
-                matchedMethods++;
-                switch (config.createMode)
-                {
-                    case PER_CLASS:
-                    {
-                        perClass.addMethod(methodNode, classNode);
-                        break;
-                    }
-                    case PER_METHOD:
-                    {
-                        VMSetGenerator perMethod = newVMSetGenerator(ClassUtils.getSimpleName(classNode) + "$" + methodNode.name + "$VM", VMlocation);
-                        perMethods.add(perMethod);
-                        perMethod.addMethod(methodNode, classNode);
-                        break;
-                    }
-                    case PER_PACKAGE:
-                    {
-                        VMSetGenerator generator = perPackage.computeIfAbsent(classPackage, ignored -> newVMSetGenerator(classPackage + "$VM", classPackage));
-                        generator.addMethod(methodNode, classNode);
-                        break;
-                    }
-                    case ONE_FOR_ALL:
-                    {
-                        allInOneVm.addMethod(methodNode, classNode);
-                        break;
-                    }
-                }
-            }
-        }
-        switch (config.createMode)
-        {
-            case PER_CLASS:
-            {
-                VMSetGenerators.addAll(perClasses);
-                break;
-            }
-            case PER_METHOD:
-            {
-                VMSetGenerators.addAll(perMethods);
-                break;
-            }
-            case PER_PACKAGE:
-            {
-                VMSetGenerators.addAll(perPackage.values());
-                break;
-            }
-            case ONE_FOR_ALL:
-            {
-                VMSetGenerators.add(allInOneVm);
-                break;
-            }
-        }
-        logger.info("{}", LogColors.scan(
-                "Scanned input file, found " +
-                        LogColors.strong(matchedMethods) +
-                        " method(s) across " +
-                        LogColors.strong(VMSetGenerators.size()) +
-                        " VM set(s)"));
-    }
-
-    private OpcMutator chooseMutator()
-    {
-        switch (config.mutateMode)
-        {
-            case ALL_RANDOM_INT:
-            {
-                return OpcMutator.MutateStrategy.RANDOM_INT.getMutator();
-            }
-            case ALL_RESORT:
-            {
-                return OpcMutator.MutateStrategy.RESORT.getMutator();
-            }
-            case ALL_AUTO_CHOOSE:
-            {
-                return OpcMutator.fromStrategy(RandomUtils.randomBoolean() ? OpcMutator.MutateStrategy.RANDOM_INT : OpcMutator.MutateStrategy.RESORT);
-            }
-            default:
-            {
-                return OpcMutator.MutateStrategy.NONE.getMutator();
-            }
-        }
-    }
-
-    private VMSetGenerator newVMSetGenerator(String name, String location)
-    {
-        return new VMSetGenerator(
-                name,
-                location,
-                chooseMutator(),
-                methodFrameGenerator,
-                vmProgramGenerator,
-                vmCodePoolGenerator,
-                config);
     }
 }

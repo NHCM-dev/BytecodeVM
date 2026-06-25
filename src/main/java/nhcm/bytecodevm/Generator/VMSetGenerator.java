@@ -203,4 +203,9 @@ public class VMSetGenerator
         uniqueCodeIds.add(codeId);
         return codeId;
     }
+
+    public boolean hasMethods()
+    {
+        return !methodsToObfuscate.isEmpty();
+    }
 }
