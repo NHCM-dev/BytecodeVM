@@ -1,4 +1,4 @@
-package nhcm.bytecodevm.Generator.GlobalTool;
+package nhcm.bytecodevm.Generator.GlobalClass;
 
 import lombok.Getter;
 import nhcm.bytecodevm.Enums.Acc;

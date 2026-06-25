@@ -7,8 +7,8 @@ import nhcm.bytecodevm.Data.VMInsn.VMMethod;
 import nhcm.bytecodevm.Enums.Acc;
 import nhcm.bytecodevm.Enums.Opcs;
 import nhcm.bytecodevm.Generator.Abstract.ClassObj;
-import nhcm.bytecodevm.Generator.GlobalTool.VMCodePoolGenerator;
-import nhcm.bytecodevm.Generator.GlobalTool.VMProgramGenerator;
+import nhcm.bytecodevm.Generator.GlobalClass.VMCodePoolGenerator;
+import nhcm.bytecodevm.Generator.GlobalClass.VMProgramGenerator;
 import nhcm.bytecodevm.Utils.*;
 import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
 import org.objectweb.asm.ConstantDynamic;
@@ -362,7 +362,7 @@ public class CodePoolGenerator extends ClassObj
             ib.getStatic(className(), "MAX_STACK", "[I");
             ib.pushInt(maxStackIndexById.get(codeId));
             ib.iaload();
-            ib.invokeSpecial(vmProgramGenerator.className(), "<init>", vmProgramGenerator.constructorDescriptor());
+            ib.invokeSpecial(vmProgramGenerator.className(), "<init>", vmProgramGenerator.layout.init.descriptor());
             ib.areturn();
         }
 

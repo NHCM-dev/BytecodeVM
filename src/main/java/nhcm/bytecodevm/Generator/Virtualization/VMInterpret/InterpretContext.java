@@ -1,6 +1,6 @@
 package nhcm.bytecodevm.Generator.Virtualization.VMInterpret;
 
-import nhcm.bytecodevm.Generator.GlobalTool.MethodFrameLayout;
+import nhcm.bytecodevm.Generator.GlobalClass.MethodFrameLayout;
 import nhcm.bytecodevm.Generator.Virtualization.VMRuntimeLayout;
 import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
 import org.objectweb.asm.tree.LabelNode;
