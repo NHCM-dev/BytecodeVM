@@ -1,6 +1,7 @@
 package nhcm.bytecodevm.Generator.Virtualization.VMInterpret;
 
 import nhcm.bytecodevm.Enums.Opcs;
+import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
 import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
 import org.objectweb.asm.tree.InsnList;
 import org.objectweb.asm.tree.LabelNode;
@@ -12,6 +13,11 @@ public abstract class InterpretBranch
     public abstract Set<Opcs> opcodes();
 
     public abstract InsnList generate(InterpretContext context, Opcs opcode);
+
+    public void generate(AdvInsnBuilder ib, InterpretContext context, Opcs opcode)
+    {
+        ib.rawBuilder().toInsnList().add(generate(context, opcode));
+    }
 
     public boolean term(Opcs opcode)
     {
@@ -70,10 +76,20 @@ public abstract class InterpretBranch
         ib.label(done);
     }
 
+    protected static void popObject(AdvInsnBuilder ib, InterpretContext context)
+    {
+        popObject(ib.rawBuilder(), context);
+    }
+
     protected static void popObject(InsnBuilder ib, InterpretContext context, int local)
     {
         popObject(ib, context);
         ib.astore(local);
+    }
+
+    protected static void popObject(AdvInsnBuilder ib, InterpretContext context, int local)
+    {
+        popObject(ib.rawBuilder(), context, local);
     }
 
     protected static void popNumber(InsnBuilder ib, InterpretContext context, NumericType type)
@@ -108,10 +124,20 @@ public abstract class InterpretBranch
         ib.label(done);
     }
 
+    protected static void popNumber(AdvInsnBuilder ib, InterpretContext context, NumericType type)
+    {
+        popNumber(ib.rawBuilder(), context, type);
+    }
+
     protected static void popNumber(InsnBuilder ib, InterpretContext context, NumericType type, int local)
     {
         popNumber(ib, context, type);
         type.store(ib, local);
+    }
+
+    protected static void popNumber(AdvInsnBuilder ib, InterpretContext context, NumericType type, int local)
+    {
+        popNumber(ib.rawBuilder(), context, type, local);
     }
 
     protected static void popInt(InsnBuilder ib, InterpretContext context)
@@ -160,6 +186,11 @@ public abstract class InterpretBranch
         pushObjectWithWidth(ib, context, 1);
     }
 
+    protected static void pushObject(AdvInsnBuilder ib, InterpretContext context)
+    {
+        pushObject(ib.rawBuilder(), context);
+    }
+
     protected static void pushObjectWithWidth(
             InsnBuilder ib,
             InterpretContext context,
@@ -169,10 +200,23 @@ public abstract class InterpretBranch
         emitPushObjectWithConstantWidth(ib, context, InterpretContext.STACK_OBJECT, width);
     }
 
+    protected static void pushObjectWithWidth(
+            AdvInsnBuilder ib,
+            InterpretContext context,
+            int width)
+    {
+        pushObjectWithWidth(ib.rawBuilder(), context, width);
+    }
+
     protected static void pushObject(InsnBuilder ib, InterpretContext context, int local)
     {
         ib.aload(local);
         pushObject(ib, context);
+    }
+
+    protected static void pushObject(AdvInsnBuilder ib, InterpretContext context, int local)
+    {
+        pushObject(ib.rawBuilder(), context, local);
     }
 
     protected static void pushObjectWithWidth(
@@ -214,6 +258,11 @@ public abstract class InterpretBranch
         }
         ib.lastore();
         emitPushWordSuffix(ib, context, type);
+    }
+
+    protected static void pushNumber(AdvInsnBuilder ib, InterpretContext context, NumericType type)
+    {
+        pushNumber(ib.rawBuilder(), context, type);
     }
 
     protected static void pushNumber(InsnBuilder ib, InterpretContext context, NumericType type, int local)

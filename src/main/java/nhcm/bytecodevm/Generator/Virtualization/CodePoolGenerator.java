@@ -6,6 +6,10 @@ import nhcm.bytecodevm.Data.VMInsn.VMInstruction;
 import nhcm.bytecodevm.Data.VMInsn.VMMethod;
 import nhcm.bytecodevm.Enums.Acc;
 import nhcm.bytecodevm.Enums.Opcs;
+import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
+import nhcm.bytecodevm.AdvInsn.Expr;
+import nhcm.bytecodevm.AdvInsn.Local;
+import nhcm.bytecodevm.AdvInsn.SwitchCase;
 import nhcm.bytecodevm.Generator.Abstract.ClassObj;
 import nhcm.bytecodevm.Generator.GlobalClass.VMCodePoolGenerator;
 import nhcm.bytecodevm.Generator.GlobalClass.VMProgramGenerator;
@@ -13,11 +17,9 @@ import nhcm.bytecodevm.Utils.*;
 import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
 import org.objectweb.asm.ConstantDynamic;
 import org.objectweb.asm.Handle;
-import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.Type;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.InsnList;
-import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.MethodNode;
 
 import java.util.*;
@@ -26,6 +28,8 @@ public class CodePoolGenerator extends ClassObj
 {
     @Getter
     public final ClassNode classNode;
+    @Getter
+    public final CodePoolLayout layout;
 
     private final List<CompiledMethod> compiledMethods;
     private final List<CompiledMethod> methodsByCodeIndex;
@@ -39,6 +43,7 @@ public class CodePoolGenerator extends ClassObj
     private final Map<Integer, Integer> maxLocalsIndexById;
     private final Map<Integer, Integer> maxStackIndexById;
     private final VMProgramGenerator vmProgramGenerator;
+    private final VMCodePoolGenerator vmCodePoolGenerator;
 
     public CodePoolGenerator(String className, List<CompiledMethod> compiledMethods, VMProgramGenerator vmProgramGenerator, VMCodePoolGenerator vmCodePoolGenerator)
     {
@@ -49,6 +54,8 @@ public class CodePoolGenerator extends ClassObj
     {
         super(className);
         this.vmProgramGenerator = vmProgramGenerator;
+        this.vmCodePoolGenerator = vmCodePoolGenerator;
+        this.layout = new CodePoolLayout(className, vmCodePoolGenerator.descriptor(), vmProgramGenerator.descriptor());
         if (vmCodePoolGenerator.vmProgramGenerator != vmProgramGenerator)
         {
             throw new IllegalArgumentException("VMCodePoolGenerator uses a different VMProgramGenerator");
@@ -77,25 +84,22 @@ public class CodePoolGenerator extends ClassObj
         InsnUtils.addPrivateInit(cn);
         cn.fields.add(FieldUtils.newFieldNode(
                 new Acc[]{Acc.PUBLIC, Acc.STATIC, Acc.FINAL},
-                "INSTANCE",
-                vmCodePoolGenerator.descriptor()));
-        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "CODES", "[[I"));
-        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "CONSTANTS", "[[Ljava/lang/Object;"));
-        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "EXCEPTION_HANDLERS", "[[I"));
-        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "MAX_LOCALS", "[I"));
-        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, "MAX_STACK", "[I"));
+                layout.instance.name(),
+                layout.instance.descriptor()));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, layout.codes.name(), layout.codes.descriptor()));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, layout.constants.name(), layout.constants.descriptor()));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, layout.exceptionHandlers.name(), layout.exceptionHandlers.descriptor()));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, layout.maxLocals.name(), layout.maxLocals.descriptor()));
+        cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, layout.maxStack.name(), layout.maxStack.descriptor()));
 
         MethodNode clinit = MethodUtils.newMethodNode(new Acc[]{Acc.STATIC}, "<clinit>", "()V");
         clinit.instructions.add(initCODES());
         clinit.instructions.add(initCONSTANTS());
         clinit.instructions.add(initEXCEPTION_HANDLERS());
         clinit.instructions.add(initMAX_LOCALS_MAX_STACK());
-        InsnBuilder ib = new InsnBuilder();
-        ib.new_(className);
-        ib.dup();
-        ib.invokeSpecial(className, "<init>", "()V");
-        ib.putStatic(className, "INSTANCE", vmCodePoolGenerator.descriptor());
-        ib._return();
+        AdvInsnBuilder ib = new AdvInsnBuilder(0);
+        ib.set(AdvInsnBuilder.staticField(layout.instance), AdvInsnBuilder.newObject(layout.owner));
+        ib.returnVoid();
         clinit.instructions.add(ib.toInsnList());
         cn.methods.add(clinit);
 
@@ -135,41 +139,32 @@ public class CodePoolGenerator extends ClassObj
 
     private InsnList initCODES()
     {
-        InsnBuilder ib = new InsnBuilder();
-        ib.pushInt(methodsByCodeIndex.size());
-        ib.multiANewArray("[[I", 1);
+        AdvInsnBuilder ib = new AdvInsnBuilder(0);
+        Local codesTable = ib.var("codes", "[[I");
+        ib.set(codesTable, AdvInsnBuilder.newMultiArray(layout.codes.descriptor(), 1, AdvInsnBuilder.constant(methodsByCodeIndex.size())));
         for (int slot = 0; slot < methodsByCodeIndex.size(); slot++)
         {
             VMMethod vmMethod = methodsByCodeIndex.get(slot).vmMethod;
             int[] codes = vmMethod.code;
 
-            ib.dup();
-            ib.pushInt(slot);
-
-            ib.pushInt(codes.length);
-            ib.newArray(Opcodes.T_INT);
-
+            Local code = ib.var("code" + slot, "[I");
+            ib.set(code, AdvInsnBuilder.newArray("int", AdvInsnBuilder.constant(codes.length)));
             for (int codeIndex = 0; codeIndex < codes.length; codeIndex++)
             {
-                ib.dup();
-                ib.pushInt(codeIndex);
-                ib.pushInt(codes[codeIndex]);
-                ib.iastore();
+                ib.setArray(code, AdvInsnBuilder.constant(codeIndex), AdvInsnBuilder.constant(codes[codeIndex]));
             }
-
-            ib.aastore();
+            ib.setArray(codesTable, AdvInsnBuilder.constant(slot), code);
         }
 
-        ib.putStatic(className(), "CODES", "[[I");
+        ib.set(AdvInsnBuilder.staticField(layout.codes), codesTable);
         return ib.toInsnList();
     }
 
     private InsnList initCONSTANTS()
     {
-        InsnBuilder ib = new InsnBuilder();
-
-        ib.pushInt(methodsByConstantsIndex.size());
-        ib.multiANewArray("[[Ljava/lang/Object;", 1);
+        AdvInsnBuilder ib = new AdvInsnBuilder(0);
+        Local constantsTable = ib.var("constants", "[[Ljava/lang/Object;");
+        ib.set(constantsTable, AdvInsnBuilder.newMultiArray(layout.constants.descriptor(), 1, AdvInsnBuilder.constant(methodsByConstantsIndex.size())));
 
         for (int slot = 0;
              slot < methodsByConstantsIndex.size();
@@ -178,142 +173,105 @@ public class CodePoolGenerator extends ClassObj
             Object[] constants =
                     methodsByConstantsIndex.get(slot).vmMethod.constants;
 
-            ib.dup();
-            ib.pushInt(slot);
-
-            ib.pushInt(constants.length);
-            ib.aneArray("java/lang/Object");
+            Local constantRow = ib.var("constants" + slot, "[Ljava/lang/Object;");
+            ib.set(constantRow, AdvInsnBuilder.newArray("java/lang/Object", AdvInsnBuilder.constant(constants.length)));
 
             for (int constantIndex = 0;
                  constantIndex < constants.length;
                  constantIndex++)
             {
-                ib.dup();
-                ib.pushInt(constantIndex);
-
-                emitConstant(ib, constants[constantIndex]);
-
-                ib.aastore();
+                emitConstant(ib, constantRow, constantIndex, constants[constantIndex]);
             }
 
-            ib.aastore();
+            ib.setArray(constantsTable, AdvInsnBuilder.constant(slot), constantRow);
         }
 
-        ib.putStatic(
-                className(),
-                "CONSTANTS",
-                "[[Ljava/lang/Object;"
-        );
+        ib.set(AdvInsnBuilder.staticField(layout.constants), constantsTable);
 
         return ib.toInsnList();
     }
 
     private InsnList initEXCEPTION_HANDLERS()
     {
-        InsnBuilder ib = new InsnBuilder();
-        ib.pushInt(methodsByExceptionHandlersIndex.size());
-        ib.multiANewArray("[[I", 1);
+        AdvInsnBuilder ib = new AdvInsnBuilder(0);
+        Local exceptionHandlers = ib.var("exceptionHandlers", "[[I");
+        ib.set(exceptionHandlers, AdvInsnBuilder.newMultiArray(layout.exceptionHandlers.descriptor(), 1, AdvInsnBuilder.constant(methodsByExceptionHandlersIndex.size())));
         for (int slot = 0; slot < methodsByExceptionHandlersIndex.size(); slot++)
         {
             int[] handlers = methodsByExceptionHandlersIndex.get(slot).vmMethod.exceptionHandlers;
 
-            ib.dup();
-            ib.pushInt(slot);
-
-            ib.pushInt(handlers.length);
-            ib.newArray(Opcodes.T_INT);
-
+            Local handlerRow = ib.var("exceptionHandlers" + slot, "[I");
+            ib.set(handlerRow, AdvInsnBuilder.newArray("int", AdvInsnBuilder.constant(handlers.length)));
             for (int handlerIndex = 0; handlerIndex < handlers.length; handlerIndex++)
             {
-                ib.dup();
-                ib.pushInt(handlerIndex);
-                ib.pushInt(handlers[handlerIndex]);
-                ib.iastore();
+                ib.setArray(handlerRow, AdvInsnBuilder.constant(handlerIndex), AdvInsnBuilder.constant(handlers[handlerIndex]));
             }
-
-            ib.aastore();
+            ib.setArray(exceptionHandlers, AdvInsnBuilder.constant(slot), handlerRow);
         }
 
-        ib.putStatic(className(), "EXCEPTION_HANDLERS", "[[I");
+        ib.set(AdvInsnBuilder.staticField(layout.exceptionHandlers), exceptionHandlers);
         return ib.toInsnList();
     }
 
-    private void emitConstant(InsnBuilder ib, Object value)
+    private void emitConstant(AdvInsnBuilder ib, Expr constants, int constantIndex, Object value)
     {
         switch (value)
         {
-            case null -> ib.aconstNull();
-            case String ignored -> ib.ldc(value);
-            case Integer integer ->
-            {
-                ib.pushInt(integer);
-                ib.invokeStatic("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;");
-            }
-            case Long number ->
-            {
-                ib.pushLong(number);
-                ib.invokeStatic("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
-            }
-            case Float number ->
-            {
-                ib.pushFloat(number);
-                ib.invokeStatic("java/lang/Float", "valueOf", "(F)Ljava/lang/Float;");
-            }
-            case Double number ->
-            {
-                ib.pushDouble(number);
-                ib.invokeStatic("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;");
-            }
-            case Type type -> emitTypeConstant(ib, type);
-            case Handle ignored -> ib.ldc(value);
-            case ConstantDynamic dynamic ->
-            {
-                ib.ldc(dynamic);
-                boxIfPrimitive(ib, Type.getType(dynamic.getDescriptor()));
-            }
+            case null -> ib.setArray(constants, AdvInsnBuilder.constant(constantIndex), AdvInsnBuilder.constant(null));
+            case String ignored -> ib.setArray(constants, AdvInsnBuilder.constant(constantIndex), AdvInsnBuilder.constant(value));
+            case Integer integer -> ib.setArray(constants, AdvInsnBuilder.constant(constantIndex), boxedInteger(integer));
+            case Long number -> ib.setArray(constants, AdvInsnBuilder.constant(constantIndex), boxedLong(number));
+            case Float number -> ib.setArray(constants, AdvInsnBuilder.constant(constantIndex), boxedFloat(number));
+            case Double number -> ib.setArray(constants, AdvInsnBuilder.constant(constantIndex), boxedDouble(number));
+            case Type type -> ib.setArray(constants, AdvInsnBuilder.constant(constantIndex), typeConstant(ib, type));
+            case Handle ignored -> ib.setArray(
+                    constants,
+                    AdvInsnBuilder.constant(constantIndex),
+                    Type.getType(Object.class),
+                    b -> b.raw(raw -> raw.ldc(value)),
+                    "handle(" + value + ")");
+            case ConstantDynamic dynamic -> ib.setArray(
+                    constants,
+                    AdvInsnBuilder.constant(constantIndex),
+                    boxedDynamicType(dynamic),
+                    b -> {
+                        b.raw(raw -> raw.ldc(dynamic));
+                        boxIfPrimitive(b.rawBuilder(), Type.getType(dynamic.getDescriptor()));
+                    },
+                    "constantDynamic(" + dynamic.getName() + ")");
             default -> throw new IllegalArgumentException("Unsupported constant: " + value.getClass().getName());
         }
     }
 
-    private void emitTypeConstant(InsnBuilder ib, Type type)
+    private Expr typeConstant(AdvInsnBuilder ib, Type type)
     {
-        ib.iconst2();
-        ib.aneArray("java/lang/Object");
-        ib.dup();
-        ib.iconst0();
-        ib.ldc("__BytecodeVM_TYPE__");
-        ib.aastore();
-        ib.dup();
-        ib.iconst1();
-        ib.ldc(type.getDescriptor());
-        ib.aastore();
+        Local value = ib.var("typeConstant" + ib.rawBuilder().hashCode() + "_" + Math.abs(type.getDescriptor().hashCode()), "[Ljava/lang/Object;");
+        ib.set(value, AdvInsnBuilder.newArray("java/lang/Object", AdvInsnBuilder.constant(2)));
+        ib.setArray(value, AdvInsnBuilder.constant(0), AdvInsnBuilder.constant("__BytecodeVM_TYPE__"));
+        ib.setArray(value, AdvInsnBuilder.constant(1), AdvInsnBuilder.constant(type.getDescriptor()));
+        return value;
     }
 
     private InsnList initMAX_LOCALS_MAX_STACK()
     {
-        InsnBuilder ib = new InsnBuilder();
-        ib.pushInt(methodsByMaxLocalsIndex.size());
-        ib.newArray(Opcodes.T_INT);
+        AdvInsnBuilder ib = new AdvInsnBuilder(0);
+        Local maxLocals = ib.var("maxLocals", "[I");
+        ib.set(maxLocals, AdvInsnBuilder.newArray("int", AdvInsnBuilder.constant(methodsByMaxLocalsIndex.size())));
         for (int slot = 0; slot < methodsByMaxLocalsIndex.size(); slot++)
         {
             VMMethod vmMethod = methodsByMaxLocalsIndex.get(slot).vmMethod;
-            ib.dup();
-            ib.pushInt(slot);
-            ib.pushInt(vmMethod.maxLocals);
-            ib.iastore();
+            ib.setArray(maxLocals, AdvInsnBuilder.constant(slot), AdvInsnBuilder.constant(vmMethod.maxLocals));
         }
-        ib.putStatic(className(), "MAX_LOCALS", "[I");
-        ib.pushInt(methodsByMaxStackIndex.size());
-        ib.newArray(Opcodes.T_INT);
+        ib.set(AdvInsnBuilder.staticField(layout.maxLocals), maxLocals);
+
+        Local maxStack = ib.var("maxStack", "[I");
+        ib.set(maxStack, AdvInsnBuilder.newArray("int", AdvInsnBuilder.constant(methodsByMaxStackIndex.size())));
         for (int slot = 0; slot < methodsByMaxStackIndex.size(); slot++)
         {
             VMMethod vmMethod = methodsByMaxStackIndex.get(slot).vmMethod;
-            ib.dup();
-            ib.pushInt(slot);
-            ib.pushInt(vmMethod.maxStack);
-            ib.iastore();
+            ib.setArray(maxStack, AdvInsnBuilder.constant(slot), AdvInsnBuilder.constant(vmMethod.maxStack));
         }
-        ib.putStatic(className(), "MAX_STACK", "[I");
+        ib.set(AdvInsnBuilder.staticField(layout.maxStack), maxStack);
         return ib.toInsnList();
     }
 
@@ -321,53 +279,125 @@ public class CodePoolGenerator extends ClassObj
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PUBLIC},
-                "find",
-                "(I)" + vmProgramGenerator.descriptor());
-        InsnBuilder ib = new InsnBuilder(method.instructions);
+                layout.find.name(),
+                layout.find.descriptor());
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local codeIdLocal = ib.getLocal("codeId", "I", 1);
 
         List<CompiledMethod> methodsByCodeId = new ArrayList<>(compiledMethods);
         methodsByCodeId.sort((left, right) -> Integer.compare(left.codeId, right.codeId));
-        int[] codeIds = new int[methodsByCodeId.size()];
-        LabelNode[] targets = new LabelNode[methodsByCodeId.size()];
+        SwitchCase[] cases = new SwitchCase[methodsByCodeId.size()];
         for (int index = 0; index < methodsByCodeId.size(); index++)
         {
-            codeIds[index] = methodsByCodeId.get(index).codeId;
-            targets[index] = new LabelNode();
-        }
-
-        LabelNode unknownCodeId = new LabelNode();
-        ib.iload(1);
-        ib.lookupSwitch(unknownCodeId, codeIds, targets);
-
-        for (int index = 0; index < targets.length; index++)
-        {
             int codeId = methodsByCodeId.get(index).codeId;
-            ib.label(targets[index]);
-            ib.new_(vmProgramGenerator.className());
-            ib.dup();
-            ib.getStatic(className(), "CODES", "[[I");
-            ib.pushInt(codeIndexById.get(codeId));
-            ib.aaload();
-            ib.getStatic(className(), "CONSTANTS", "[[Ljava/lang/Object;");
-            ib.pushInt(constantsIndexById.get(codeId));
-            ib.aaload();
-            ib.getStatic(className(), "EXCEPTION_HANDLERS", "[[I");
-            ib.pushInt(exceptionHandlersIndexById.get(codeId));
-            ib.aaload();
-            ib.getStatic(className(), "MAX_LOCALS", "[I");
-            ib.pushInt(maxLocalsIndexById.get(codeId));
-            ib.iaload();
-            ib.getStatic(className(), "MAX_STACK", "[I");
-            ib.pushInt(maxStackIndexById.get(codeId));
-            ib.iaload();
-            ib.invokeSpecial(vmProgramGenerator.className(), "<init>", vmProgramGenerator.layout.init.descriptor());
-            ib.areturn();
+            cases[index] = AdvInsnBuilder.switchCase(codeId, b -> b.returnValue(programFor(codeId)));
         }
 
-        ib.label(unknownCodeId);
-        ib.aconstNull();
-        ib.areturn();
+        ib.switchLookup(
+                codeIdLocal,
+                b -> b.returnValue(AdvInsnBuilder.nullValue(vmProgramGenerator.className())),
+                cases);
         return method;
+    }
+
+    private Expr programFor(int codeId)
+    {
+        return AdvInsnBuilder.newObject(
+                vmProgramGenerator.layout.owner,
+                codeRow(codeId),
+                constantRow(codeId),
+                exceptionHandlerRow(codeId),
+                maxLocalsValue(codeId),
+                maxStackValue(codeId));
+    }
+
+    private Expr codeRow(int codeId)
+    {
+        return AdvInsnBuilder.arrayAt(
+                AdvInsnBuilder.staticField(layout.codes),
+                AdvInsnBuilder.constant(codeIndexById.get(codeId)));
+    }
+
+    private Expr constantRow(int codeId)
+    {
+        return AdvInsnBuilder.arrayAt(
+                AdvInsnBuilder.staticField(layout.constants),
+                AdvInsnBuilder.constant(constantsIndexById.get(codeId)));
+    }
+
+    private Expr exceptionHandlerRow(int codeId)
+    {
+        return AdvInsnBuilder.arrayAt(
+                AdvInsnBuilder.staticField(layout.exceptionHandlers),
+                AdvInsnBuilder.constant(exceptionHandlersIndexById.get(codeId)));
+    }
+
+    private Expr maxLocalsValue(int codeId)
+    {
+        return AdvInsnBuilder.arrayAt(
+                AdvInsnBuilder.staticField(layout.maxLocals),
+                AdvInsnBuilder.constant(maxLocalsIndexById.get(codeId)));
+    }
+
+    private Expr maxStackValue(int codeId)
+    {
+        return AdvInsnBuilder.arrayAt(
+                AdvInsnBuilder.staticField(layout.maxStack),
+                AdvInsnBuilder.constant(maxStackIndexById.get(codeId)));
+    }
+
+    private static Expr boxedInteger(Integer value)
+    {
+        return AdvInsnBuilder.callStatic(
+                "java/lang/Integer",
+                "valueOf",
+                "java/lang/Integer",
+                AdvInsnBuilder.constant(value));
+    }
+
+    private static Expr boxedLong(Long value)
+    {
+        return AdvInsnBuilder.callStatic(
+                "java/lang/Long",
+                "valueOf",
+                "java/lang/Long",
+                AdvInsnBuilder.constant(value));
+    }
+
+    private static Expr boxedFloat(Float value)
+    {
+        return AdvInsnBuilder.callStatic(
+                "java/lang/Float",
+                "valueOf",
+                "java/lang/Float",
+                AdvInsnBuilder.constant(value));
+    }
+
+    private static Expr boxedDouble(Double value)
+    {
+        return AdvInsnBuilder.callStatic(
+                "java/lang/Double",
+                "valueOf",
+                "java/lang/Double",
+                AdvInsnBuilder.constant(value));
+    }
+
+    private static Type boxedDynamicType(ConstantDynamic dynamic)
+    {
+        Type type = Type.getType(dynamic.getDescriptor());
+        return switch (type.getSort())
+        {
+            case Type.BOOLEAN -> Type.getType(Boolean.class);
+            case Type.BYTE -> Type.getType(Byte.class);
+            case Type.CHAR -> Type.getType(Character.class);
+            case Type.SHORT -> Type.getType(Short.class);
+            case Type.INT -> Type.getType(Integer.class);
+            case Type.FLOAT -> Type.getType(Float.class);
+            case Type.LONG -> Type.getType(Long.class);
+            case Type.DOUBLE -> Type.getType(Double.class);
+            case Type.ARRAY, Type.OBJECT -> type;
+            default -> throw new IllegalArgumentException("Unsupported constant descriptor: " + type.getDescriptor());
+        };
     }
 
     private static List<CompiledMethod> createLayout(

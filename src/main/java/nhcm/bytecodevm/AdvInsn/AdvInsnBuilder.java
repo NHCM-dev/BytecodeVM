@@ -158,7 +158,9 @@ public class AdvInsnBuilder
         Objects.requireNonNull(type, "type");
         Local local = new Local(name, type, index);
         locals.put(name, local);
-        updateMaxLocals(index + AdvInsnSupport.slotSize(type));
+        int end = index + AdvInsnSupport.slotSize(type);
+        nextLocal = Math.max(nextLocal, end);
+        updateMaxLocals(end);
         return local;
     }
 
@@ -732,7 +734,7 @@ public class AdvInsnBuilder
         {
             throw new IllegalArgumentException("Not an array: " + arrayType);
         }
-        Type elementType = arrayType.getElementType();
+        Type elementType = arrayComponentType(arrayType);
         value = autoCastIfNeeded(elementType, value);
         AdvInsnSupport.requireAssignable(elementType, value.type());
         appendView(array.source() + "[" + index.source() + "] = " + value.source() + ";");
@@ -758,7 +760,7 @@ public class AdvInsnBuilder
         {
             throw new IllegalArgumentException("Not an array: " + arrayType);
         }
-        Type elementType = arrayType.getElementType();
+        Type elementType = arrayComponentType(arrayType);
         boolean autoPrimitiveCast = shouldAutoPrimitiveCast(elementType, valueType);
         boolean autoBox = shouldAutoBox(elementType, valueType);
         Type actualValueType = autoPrimitiveCast ? elementType : (autoBox ? wrapperType(valueType) : valueType);
@@ -908,6 +910,16 @@ public class AdvInsnBuilder
     {
         appendView("// label " + name);
         return builder.label();
+    }
+
+    /**
+     * Marks an existing ASM label while keeping the high-level source view readable.
+     */
+    public AdvInsnBuilder mark(LabelNode label, String name)
+    {
+        appendView("// label " + name);
+        builder.label(label);
+        return this;
     }
 
     /**
@@ -1658,10 +1670,11 @@ public class AdvInsnBuilder
         {
             throw new IllegalArgumentException("Not an array: " + arrayType);
         }
-        return new SimpleExpr(arrayType.getElementType(), ib -> {
+        Type elementType = arrayComponentType(arrayType);
+        return new SimpleExpr(elementType, ib -> {
             array.emit(ib);
             index.emit(ib);
-            emitArrayLoad(ib, arrayType.getElementType());
+            emitArrayLoad(ib, elementType);
         }, array.source() + "[" + index.source() + "]");
     }
 
@@ -2388,6 +2401,18 @@ public class AdvInsnBuilder
             case Type.SHORT -> ib.saload();
             default -> ib.iaload();
         }
+    }
+
+    /**
+     * Returns the direct component type of an array, preserving one fewer dimension for nested arrays.
+     */
+    private static Type arrayComponentType(Type arrayType)
+    {
+        if (arrayType.getSort() != Type.ARRAY)
+        {
+            throw new IllegalArgumentException("Not an array: " + arrayType);
+        }
+        return Type.getType(arrayType.getDescriptor().substring(1));
     }
 
     /**

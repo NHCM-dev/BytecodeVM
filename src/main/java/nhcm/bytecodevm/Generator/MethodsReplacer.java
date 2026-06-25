@@ -71,7 +71,7 @@ public class MethodsReplacer
                 "execute",
                 "Ljava/lang/Object;",
                 AdvInsnBuilder.constant(compiledMethod.codeId),
-                (isStatic ? AdvInsnBuilder.constant(null) : AdvInsnBuilder.self(owner.name)),
+                (isStatic ? AdvInsnBuilder.constant(null) : AdvInsnBuilder.cast(AdvInsnBuilder.self(owner.name), "java/lang/Object")),
                 argArray
         );
         if(returnType.equals(Type.VOID_TYPE))

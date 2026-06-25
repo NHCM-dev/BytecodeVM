@@ -1,7 +1,12 @@
 package nhcm.bytecodevm.Generator.Virtualization.VMInterpret;
 
+import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
+import nhcm.bytecodevm.AdvInsn.Expr;
+import nhcm.bytecodevm.AdvInsn.FieldAccess;
+import nhcm.bytecodevm.AdvInsn.Local;
 import nhcm.bytecodevm.Generator.GlobalClass.MethodFrameLayout;
 import nhcm.bytecodevm.Generator.Virtualization.VMRuntimeLayout;
+import nhcm.bytecodevm.Utils.Builder.FieldRef;
 import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
 import org.objectweb.asm.tree.LabelNode;
 
@@ -58,17 +63,104 @@ public final class InterpretContext
 
     public final String vmClassName;
     public final String frameClassName;
+    public final String programClassName;
     public final MethodFrameLayout frame;
     public final VMRuntimeLayout vm;
     public final LabelNode loopStart;
 
     public InterpretContext(String vmClassName, String frameClassName, LabelNode loopStart)
     {
+        this(vmClassName, frameClassName, null, loopStart);
+    }
+
+    public InterpretContext(String vmClassName, String frameClassName, String programClassName, LabelNode loopStart)
+    {
         this.vmClassName = vmClassName;
         this.frameClassName = frameClassName;
+        this.programClassName = programClassName;
         this.frame = new MethodFrameLayout(frameClassName);
         this.vm = new VMRuntimeLayout(vmClassName, "L" + frameClassName + ";");
         this.loopStart = loopStart;
+    }
+
+    public Local program()
+    {
+        if (programClassName == null)
+        {
+            throw new IllegalStateException("programClassName is required for AdvInsnBuilder program() access");
+        }
+        return AdvInsnBuilder.local("program", programClassName, PROGRAM);
+    }
+
+    public Local frame()
+    {
+        return AdvInsnBuilder.local("frame", frameClassName, FRAME);
+    }
+
+    public Local code()
+    {
+        return AdvInsnBuilder.local("code", "[I", CODE);
+    }
+
+    public Local constants()
+    {
+        return AdvInsnBuilder.local("constants", "[Ljava/lang/Object;", CONSTANTS);
+    }
+
+    public Local opcode()
+    {
+        return AdvInsnBuilder.local("opcode", "I", OPCODE);
+    }
+
+    public Local exceptionHandlers()
+    {
+        return AdvInsnBuilder.local("exceptionHandlers", "[I", EXCEPTION_HANDLERS);
+    }
+
+    public Local instructionPc()
+    {
+        return AdvInsnBuilder.local("instructionPc", "I", INSTRUCTION_PC);
+    }
+
+    public Local thrown()
+    {
+        return AdvInsnBuilder.local("thrown", "java/lang/Throwable", THROWN);
+    }
+
+    public Local handlerPc()
+    {
+        return AdvInsnBuilder.local("handlerPc", "I", HANDLER_PC);
+    }
+
+    public FieldAccess frameField(FieldRef field)
+    {
+        return AdvInsnBuilder.field(frame(), field);
+    }
+
+    public FieldAccess frameProgramCounter()
+    {
+        return frameField(frame.programCounter);
+    }
+
+    public FieldAccess frameReturned()
+    {
+        return frameField(frame.returned);
+    }
+
+    public FieldAccess frameReturnValue()
+    {
+        return frameField(frame.returnValue);
+    }
+
+    public Expr tokenAtProgramCounter()
+    {
+        return AdvInsnBuilder.arrayAt(code(), frameProgramCounter());
+    }
+
+    public void nextToken(AdvInsnBuilder ib, Local target)
+    {
+        ib.set(target, tokenAtProgramCounter());
+        ib.set(frameProgramCounter(), AdvInsnBuilder.plus(frameProgramCounter(), AdvInsnBuilder.constant(1)));
     }
 
     public void loadFrame(InsnBuilder ib)

@@ -4,6 +4,10 @@ import lombok.Getter;
 import nhcm.bytecodevm.Config.BytecodeVMConfig;
 import nhcm.bytecodevm.Enums.Acc;
 import nhcm.bytecodevm.Enums.Opcs;
+import nhcm.bytecodevm.AdvInsn.AdvInsnBuilder;
+import nhcm.bytecodevm.AdvInsn.Expr;
+import nhcm.bytecodevm.AdvInsn.Local;
+import nhcm.bytecodevm.AdvInsn.SwitchCase;
 import nhcm.bytecodevm.Generator.Abstract.ClassObj;
 import nhcm.bytecodevm.Generator.GlobalClass.MethodFrameGenerator;
 import nhcm.bytecodevm.Generator.GlobalClass.MethodFrameLayout;
@@ -19,6 +23,7 @@ import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Conversion.Comp
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Conversion.ConvertBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Field.ReadFieldBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Field.WriteFieldBranch;
+import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Invoke.InvokeDynamicBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Invoke.InvokeNormalBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Local.StoreLocalBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Object.CastBranch;
@@ -34,12 +39,10 @@ import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Math.*;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Local.IncrementBranch;
 import nhcm.bytecodevm.Generator.Virtualization.VMInterpret.Impl.Local.LoadLocalBranch;
 import nhcm.bytecodevm.Tools.OpcMutator;
-import nhcm.bytecodevm.Utils.Builder.InsnBuilder;
 import nhcm.bytecodevm.Utils.ClassUtils;
 import nhcm.bytecodevm.Utils.FieldUtils;
 import nhcm.bytecodevm.Utils.InsnUtils;
 import nhcm.bytecodevm.Utils.MethodUtils;
-import nhcm.bytecodevm.Utils.TypeUtils;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.LabelNode;
 import org.objectweb.asm.tree.MethodNode;
@@ -55,7 +58,7 @@ public class VMGenerator extends ClassObj
     static
     {
         registerBranches();
-        // validateBranches();
+        validateBranches();
     }
 
     private static void registerBranches()
@@ -211,20 +214,6 @@ public class VMGenerator extends ClassObj
     private MethodNode genInterpretMethod()
     {
         MethodNode methodNode = MethodUtils.newMethodNode(new Acc[]{Acc.PRIVATE, Acc.STATIC}, vmLayout.interpret.name(), vmLayout.interpret.descriptor());
-        InsnBuilder ib = new InsnBuilder(methodNode.instructions);
-        // int[] code = program.code();
-        ib.aload(InterpretContext.PROGRAM);
-        programLayout.code.invokeVirtual(ib);
-        ib.astore(InterpretContext.CODE);
-        // Object[] constants = program.constants();
-        ib.aload(InterpretContext.PROGRAM);
-        programLayout.constants.invokeVirtual(ib);
-        ib.astore(InterpretContext.CONSTANTS);
-        // int[] exceptionHandlers = program.exceptionHandlers();
-        ib.aload(InterpretContext.PROGRAM);
-        programLayout.exceptionHandlers.invokeVirtual(ib);
-        ib.astore(InterpretContext.EXCEPTION_HANDLERS);
-
         LabelNode loopStart = new LabelNode();
         LabelNode loopEnd = new LabelNode();
         LabelNode unknownOpcode = new LabelNode();
@@ -237,74 +226,88 @@ public class VMGenerator extends ClassObj
                 tryEnd,
                 exceptionHandler,
                 "java/lang/Throwable"));
+        AdvInsnBuilder ib = new AdvInsnBuilder(methodNode);
+        InterpretContext context = new InterpretContext(
+                className(),
+                frameLayout.owner,
+                programLayout.owner,
+                loopStart);
+
+        // int[] code = program.code();
+        ib.set(context.code(), AdvInsnBuilder.callVirtual(
+                context.program(),
+                programLayout.owner,
+                programLayout.code.name(),
+                "[I"));
+        // Object[] constants = program.constants();
+        ib.set(context.constants(), AdvInsnBuilder.callVirtual(
+                context.program(),
+                programLayout.owner,
+                programLayout.constants.name(),
+                "[Ljava/lang/Object;"));
+        // int[] exceptionHandlers = program.exceptionHandlers();
+        ib.set(context.exceptionHandlers(), AdvInsnBuilder.callVirtual(
+                context.program(),
+                programLayout.owner,
+                programLayout.exceptionHandlers.name(),
+                "[I"));
 
         // while (!frame.returned)
-        ib.label(loopStart);
-        ib.aload(InterpretContext.FRAME);
-        frameLayout.returned.get(ib);
-        ib.ifne(loopEnd);
+        ib.mark(loopStart, "loopStart");
+        ib.ifCondition(AdvInsnBuilder.isTrue(context.frameReturned()), b -> b.gotoLabel(loopEnd));
 
         // int instructionPc = frame.programCounter;
-        ib.aload(InterpretContext.FRAME);
-        frameLayout.programCounter.get(ib);
-        ib.istore(InterpretContext.INSTRUCTION_PC);
+        ib.set(context.instructionPc(), context.frameProgramCounter());
 
         // int opcode = code[frame.programCounter++];
-        ib.label(tryStart);
-        ib.aload(InterpretContext.CODE);
-        ib.aload(InterpretContext.FRAME);
-        ib.dup();
-        frameLayout.programCounter.get(ib);
-        ib.dupX1();
-        ib.iconst1();
-        ib.iadd();
-        frameLayout.programCounter.put(ib);
-        ib.iaload();
-        ib.istore(InterpretContext.OPCODE);
+        ib.mark(tryStart, "tryStart");
+        context.nextToken(ib, context.opcode());
 
         generateDispatch(
-                methodNode,
+                ib,
                 loopStart,
                 unknownOpcode
         );
-        ib.label(tryEnd);
+        ib.mark(tryEnd, "tryEnd");
 
-        ib.label(unknownOpcode);
+        ib.mark(unknownOpcode, "unknownOpcode");
         generateUnknownOpcode(ib);
 
-        ib.label(exceptionHandler);
-        ib.astore(InterpretContext.THROWN);
-        ib.aload(InterpretContext.THROWN);
-        ib.aload(InterpretContext.EXCEPTION_HANDLERS);
-        ib.iload(InterpretContext.INSTRUCTION_PC);
-        ib.aload(InterpretContext.CONSTANTS);
-        vmLayout.findExceptionHandler.invokeStatic(ib);
-        ib.istore(InterpretContext.HANDLER_PC);
-        ib.iload(InterpretContext.HANDLER_PC);
-        ib.iflt(noHandler);
-        ib.aload(InterpretContext.FRAME);
-        ib.iconst0();
-        frameLayout.stackPointer.put(ib);
-        ib.aload(InterpretContext.FRAME);
-        ib.aload(InterpretContext.THROWN);
-        frameLayout.push.invokeVirtual(ib);
-        ib.aload(InterpretContext.FRAME);
-        ib.iload(InterpretContext.HANDLER_PC);
-        frameLayout.programCounter.put(ib);
-        ib.goto_(loopStart);
+        ib.mark(exceptionHandler, "exceptionHandler");
+        ib.storeTop(context.thrown());
+        ib.set(context.handlerPc(), AdvInsnBuilder.callStatic(
+                vmLayout.owner,
+                vmLayout.findExceptionHandler.name(),
+                "I",
+                context.thrown(),
+                context.exceptionHandlers(),
+                context.instructionPc(),
+                context.constants()));
+        ib.ifCondition(AdvInsnBuilder.lessThan(context.handlerPc(), AdvInsnBuilder.constant(0)), b -> b.gotoLabel(noHandler));
+        ib.set(context.frameField(frameLayout.stackPointer), AdvInsnBuilder.constant(0));
+        ib.directCall(AdvInsnBuilder.callVirtual(
+                context.frame(),
+                frameLayout.owner,
+                frameLayout.push.name(),
+                "V",
+                AdvInsnBuilder.cast(context.thrown(), "java/lang/Object")));
+        ib.set(context.frameProgramCounter(), context.handlerPc());
+        ib.gotoLabel(loopStart);
 
-        ib.label(noHandler);
-        ib.aload(InterpretContext.THROWN);
-        vmLayout.rethrow.invokeStatic(ib);
-        ib.athrow();
+        ib.mark(noHandler, "noHandler");
+        ib.throwValue(AdvInsnBuilder.callStatic(
+                vmLayout.owner,
+                vmLayout.rethrow.name(),
+                "java/lang/RuntimeException",
+                context.thrown()));
 
-        ib.label(loopEnd);
-        ib._return();
+        ib.mark(loopEnd, "loopEnd");
+        ib.returnVoid();
 
         return methodNode;
     }
 
-    private void generateDispatch(MethodNode method, LabelNode loopStart, LabelNode unknownOpcode)
+    private void generateDispatch(AdvInsnBuilder ib, LabelNode loopStart, LabelNode unknownOpcode)
     {
         Set<Opcs> opcodeSet = EnumSet.noneOf(Opcs.class);
         switch (config.interpretMode)
@@ -338,35 +341,31 @@ public class VMGenerator extends ClassObj
             classNode.methods.add(genInterpretChunkMethod(i, chunks.get(i)));
         }
 
-        int[] keys = new int[opcodes.size()];
-        LabelNode[] labels = new LabelNode[opcodes.size()];
-
+        InterpretContext context = new InterpretContext(
+                className(),
+                frameLayout.owner,
+                programLayout.owner,
+                loopStart);
+        SwitchCase[] cases = new SwitchCase[opcodes.size()];
         for (int i = 0; i < opcodes.size(); i++)
         {
-            keys[i] = opcMutator.toMutated(opcodes.get(i));
-            labels[i] = new LabelNode();
+            int chunkIndex = i / INTERPRET_CHUNK_SIZE;
+            int opcodeIndex = i % INTERPRET_CHUNK_SIZE;
+            cases[i] = AdvInsnBuilder.switchCase(opcMutator.toMutated(opcodes.get(i)), b -> {
+                b.directCall(AdvInsnBuilder.callStatic(
+                        className(),
+                        interpretChunkName(chunkIndex),
+                        "V",
+                        context.program(),
+                        context.frame(),
+                        context.code(),
+                        context.constants(),
+                        context.opcode(),
+                        AdvInsnBuilder.constant(opcodeIndex)));
+                b.gotoLabel(loopStart);
+            });
         }
-
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-
-        ib.iload(4);
-        ib.lookupSwitch(unknownOpcode, keys, labels);
-
-        for (int i = 0; i < opcodes.size(); i++)
-        {
-            ib.label(labels[i]);
-            ib.aload(InterpretContext.PROGRAM);
-            ib.aload(InterpretContext.FRAME);
-            ib.aload(InterpretContext.CODE);
-            ib.aload(InterpretContext.CONSTANTS);
-            ib.iload(InterpretContext.OPCODE);
-            ib.pushInt(i % INTERPRET_CHUNK_SIZE);
-            ib.invokeStatic(
-                    className(),
-                    interpretChunkName(i / INTERPRET_CHUNK_SIZE),
-                    interpretChunkDescriptor());
-            ib.goto_(loopStart);
-        }
+        ib.switchLookup(context.opcode(), b -> b.gotoLabel(unknownOpcode), cases);
     }
 
     private MethodNode genInterpretChunkMethod(int chunkIndex, List<Opcs> opcodes)
@@ -375,23 +374,15 @@ public class VMGenerator extends ClassObj
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
                 interpretChunkName(chunkIndex),
                 interpretChunkDescriptor());
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        LabelNode done = new LabelNode();
-        LabelNode unknownOpcode = new LabelNode();
-        LabelNode[] labels = new LabelNode[opcodes.size()];
-
-        for (int i = 0; i < opcodes.size(); i++)
-        {
-            labels[i] = new LabelNode();
-        }
-
-        ib.iload(InterpretContext.RIGHT_VALUE);
-        ib.tableSwitch(0, opcodes.size() - 1, unknownOpcode, labels);
-
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local opcodeIndex = ib.getLocal("opcodeIndex", "I", InterpretContext.RIGHT_VALUE);
         InterpretContext context = new InterpretContext(
                 className(),
                 frameLayout.owner,
-                done);
+                programLayout.owner,
+                null);
+        @SuppressWarnings("unchecked")
+        java.util.function.Consumer<AdvInsnBuilder>[] cases = new java.util.function.Consumer[opcodes.size()];
         for (int i = 0; i < opcodes.size(); i++)
         {
             Opcs opcode = opcodes.get(i);
@@ -400,20 +391,15 @@ public class VMGenerator extends ClassObj
             {
                 throw new IllegalStateException("Missing interpret branch: " + opcode);
             }
-
-            ib.label(labels[i]);
-            method.instructions.add(branch.generate(context, opcode));
-            if (!branch.term(opcode))
-            {
-                ib.goto_(done);
-            }
+            cases[i] = b -> branch.generate(b, context, opcode);
         }
 
-        ib.label(unknownOpcode);
-        generateUnknownOpcode(ib);
-
-        ib.label(done);
-        ib._return();
+        ib.switchTable(
+                opcodeIndex,
+                0,
+                this::generateUnknownOpcode,
+                cases);
+        ib.returnVoid();
         return method;
     }
 
@@ -438,36 +424,17 @@ public class VMGenerator extends ClassObj
                 "[I[Ljava/lang/Object;II)V";
     }
 
-    private void generateUnknownOpcode(InsnBuilder ib)
+    private void generateUnknownOpcode(AdvInsnBuilder ib)
     {
-        ib.new_("java/lang/IllegalStateException");
-        ib.dup();
-        ib.new_("java/lang/StringBuilder");
-        ib.dup();
-        ib.ldc("Unknown VM opcode ");
-        ib.invokeSpecial("java/lang/StringBuilder", "<init>", "(Ljava/lang/String;)V");
-        ib.iload(InterpretContext.OPCODE);
-        ib.invokeStatic("java/lang/Integer", "toHexString", "(I)Ljava/lang/String;");
-        ib.invokeVirtual(
-                "java/lang/StringBuilder",
-                "append",
-                "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
-        ib.ldc(" at pc ");
-        ib.invokeVirtual(
-                "java/lang/StringBuilder",
-                "append",
-                "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
-        ib.aload(InterpretContext.FRAME);
-        frameLayout.programCounter.get(ib);
-        ib.iconst1();
-        ib.isub();
-        ib.invokeVirtual(
-                "java/lang/StringBuilder",
-                "append",
-                "(I)Ljava/lang/StringBuilder;");
-        ib.invokeVirtual("java/lang/StringBuilder", "toString", "()Ljava/lang/String;");
-        ib.invokeSpecial("java/lang/IllegalStateException", "<init>", "(Ljava/lang/String;)V");
-        ib.athrow();
+        Local frame = AdvInsnBuilder.local("frame", frameLayout.owner, InterpretContext.FRAME);
+        Local opcode = AdvInsnBuilder.local("opcode", "I", InterpretContext.OPCODE);
+        ib.throwValue(AdvInsnBuilder.newObject(
+                "java/lang/IllegalStateException",
+                stringConcat(
+                        AdvInsnBuilder.constant("Unknown VM opcode "),
+                        AdvInsnBuilder.callStatic("java/lang/Integer", "toHexString", "java/lang/String", opcode),
+                        AdvInsnBuilder.constant(" at pc "),
+                        AdvInsnBuilder.minus(AdvInsnBuilder.field(frame, frameLayout.programCounter), AdvInsnBuilder.constant(1)))));
     }
 
     private MethodNode genExecuteMethod()
@@ -478,72 +445,56 @@ public class VMGenerator extends ClassObj
                 "(ILjava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;",
                 "<T:Ljava/lang/Object;>(ILjava/lang/Object;[Ljava/lang/Object;)TT;",
                 null);
-        InsnBuilder ib = new InsnBuilder(methodNode.instructions);
-        int codeId = 0;
-        int receiver = 1;
-        int arguments = 2;
-        int program = 3;
-        int frame = 4;
-        int argumentOffset = 5;
+        AdvInsnBuilder ib = new AdvInsnBuilder(methodNode);
+        Local codeId = ib.getLocal("codeId", "I", 0);
+        Local receiver = ib.getLocal("receiver", "java/lang/Object", 1);
+        Local arguments = ib.getLocal("arguments", "[Ljava/lang/Object;", 2);
+        Local program = ib.getLocal("program", programLayout.owner, 3);
+        Local frame = ib.getLocal("frame", frameLayout.owner, 4);
+        Local argumentOffset = ib.getLocal("argumentOffset", "I", 5);
 
         // VMProgram program = resolve(codeId);
-        ib.iload(codeId);
-        vmLayout.resolve.invokeStatic(ib);
-        ib.astore(program);
+        ib.set(program, AdvInsnBuilder.callStatic(
+                vmLayout.owner,
+                vmLayout.resolve.name(),
+                programLayout.owner,
+                codeId));
 
         // MethodFrame frame = new MethodFrame(program.maxLocals(), program.maxStack());
-        ib.new_(frameLayout.owner);
-        ib.dup();
-        ib.aload(program);
-        programLayout.maxLocals.invokeVirtual(ib);
-        ib.aload(program);
-        programLayout.maxStack.invokeVirtual(ib);
-        frameLayout.init.invokeSpecial(ib);
-        ib.astore(frame);
-
-        LabelNode staticMethod = new LabelNode();
-        LabelNode argumentsReady = new LabelNode();
+        ib.set(frame, AdvInsnBuilder.newObject(
+                frameLayout.owner,
+                AdvInsnBuilder.callVirtual(program, programLayout.owner, programLayout.maxLocals.name(), "I"),
+                AdvInsnBuilder.callVirtual(program, programLayout.owner, programLayout.maxStack.name(), "I")));
 
         // Instance methods reserve locals[0] for the receiver.
-        ib.aload(receiver);
-        ib.ifNull(staticMethod);
-        ib.aload(frame);
-        frameLayout.locals.get(ib);
-        ib.iconst0();
-        ib.aload(receiver);
-        ib.aastore();
-        ib.iconst1();
-        ib.istore(argumentOffset);
-        ib.goto_(argumentsReady);
-
-        // Static methods start their arguments at locals[0].
-        ib.label(staticMethod);
-        ib.iconst0();
-        ib.istore(argumentOffset);
-
-        ib.label(argumentsReady);
+        ib.ifElse(
+                AdvInsnBuilder.notNull(receiver),
+                b -> {
+                    b.setArray(AdvInsnBuilder.field(frame, frameLayout.locals), AdvInsnBuilder.constant(0), receiver);
+                    b.set(argumentOffset, AdvInsnBuilder.constant(1));
+                },
+                b -> b.set(argumentOffset, AdvInsnBuilder.constant(0)));
 
         // System.arraycopy(arguments, 0, frame.locals, argumentOffset, arguments.length);
-        ib.aload(arguments);
-        ib.iconst0();
-        ib.aload(frame);
-        frameLayout.locals.get(ib);
-        ib.iload(argumentOffset);
-        ib.aload(arguments);
-        ib.arrayLength();
-        ib.invokeStatic(
+        ib.directCall(AdvInsnBuilder.callStatic(
                 "java/lang/System",
                 "arraycopy",
-                "(Ljava/lang/Object;ILjava/lang/Object;II)V");
+                "V",
+                AdvInsnBuilder.cast(arguments, "java/lang/Object"),
+                AdvInsnBuilder.constant(0),
+                AdvInsnBuilder.cast(AdvInsnBuilder.field(frame, frameLayout.locals), "java/lang/Object"),
+                argumentOffset,
+                AdvInsnBuilder.arrayLength(arguments)));
 
         // interpret(program, frame);
-        ib.aload(program);
-        ib.aload(frame);
-        vmLayout.interpret.invokeStatic(ib);
+        ib.directCall(AdvInsnBuilder.callStatic(
+                vmLayout.owner,
+                vmLayout.interpret.name(),
+                "V",
+                program,
+                frame));
 
-        ib.aload(frame);
-        frameLayout.returnValue.get(ib);
-        ib.areturn();
+        ib.returnValue(AdvInsnBuilder.field(frame, frameLayout.returnValue));
         return methodNode;
     }
 
@@ -553,52 +504,61 @@ public class VMGenerator extends ClassObj
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
                 vmLayout.resolve.name(),
                 vmLayout.resolve.descriptor());
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        int resolved = 1;
-        int iterator = 2;
-        int candidate = 3;
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local codeId = ib.getLocal("codeId", "I", 0);
+        Local resolved = ib.getLocal("resolved", programLayout.owner, 1);
+        Local iterator = ib.getLocal("iterator", "java/util/Iterator", 2);
+        Local candidate = ib.getLocal("candidate", programLayout.owner, 3);
 
-        ib.aconstNull();
-        ib.astore(resolved);
-        vmLayout.codePools.getStatic(ib);
-        ib.invokeInterface("java/util/List", "iterator", "()Ljava/util/Iterator;");
-        ib.astore(iterator);
+        ib.set(resolved, AdvInsnBuilder.nullValue(programLayout.owner));
+        ib.set(iterator, AdvInsnBuilder.callInterface(
+                AdvInsnBuilder.staticField(vmLayout.codePools),
+                "java/util/List",
+                "iterator",
+                "java/util/Iterator"));
 
-        LabelNode loop = new LabelNode();
-        LabelNode done = new LabelNode();
-        LabelNode next = new LabelNode();
-        LabelNode accept = new LabelNode();
-        LabelNode found = new LabelNode();
+        ib.whileLoop(
+                AdvInsnBuilder.isTrue(AdvInsnBuilder.callInterface(
+                        iterator,
+                        "java/util/Iterator",
+                        "hasNext",
+                        "Z")),
+                b -> {
+                    Expr pool = AdvInsnBuilder.cast(
+                            AdvInsnBuilder.callInterface(
+                                    iterator,
+                                    "java/util/Iterator",
+                                    "next",
+                                    "java/lang/Object"),
+                            vmCodePoolGenerator.className());
+                    b.set(candidate, AdvInsnBuilder.callInterface(
+                            pool,
+                            vmCodePoolGenerator.className(),
+                            "find",
+                            programLayout.owner,
+                            codeId));
+                    b.ifCondition(
+                            AdvInsnBuilder.notNull(candidate),
+                            found -> {
+                                found.ifCondition(
+                                        AdvInsnBuilder.notNull(resolved),
+                                        duplicate -> throwExceptionWithInt(
+                                                duplicate,
+                                                "java/lang/IllegalStateException",
+                                                "Duplicate code id: ",
+                                                codeId));
+                                found.set(resolved, candidate);
+                            });
+                });
 
-        ib.label(loop);
-        ib.aload(iterator);
-        ib.invokeInterface("java/util/Iterator", "hasNext", "()Z");
-        ib.ifeq(done);
-        ib.aload(iterator);
-        ib.invokeInterface("java/util/Iterator", "next", "()Ljava/lang/Object;");
-        ib.checkCast(vmCodePoolGenerator.className());
-        ib.iload(0);
-        ib.invokeInterface(vmCodePoolGenerator.className(), "find", "(I)" + vmProgramGenerator.descriptor());
-        ib.astore(candidate);
-        ib.aload(candidate);
-        ib.ifNull(next);
-        ib.aload(resolved);
-        ib.ifNull(accept);
-        emitExceptionWithInt(ib, "java/lang/IllegalStateException", "Duplicate code id: ", 0);
-
-        ib.label(accept);
-        ib.aload(candidate);
-        ib.astore(resolved);
-        ib.label(next);
-        ib.goto_(loop);
-
-        ib.label(done);
-        ib.aload(resolved);
-        ib.ifNonNull(found);
-        emitExceptionWithInt(ib, "java/lang/IllegalArgumentException", "Unknown code id: ", 0);
-        ib.label(found);
-        ib.aload(resolved);
-        ib.areturn();
+        ib.ifCondition(
+                AdvInsnBuilder.isNull(resolved),
+                b -> throwExceptionWithInt(
+                        b,
+                        "java/lang/IllegalArgumentException",
+                        "Unknown code id: ",
+                        codeId));
+        ib.returnValue(resolved);
         return method;
     }
 
@@ -608,12 +568,10 @@ public class VMGenerator extends ClassObj
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
                 vmLayout.constantString.name(),
                 vmLayout.constantString.descriptor());
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        ib.aload(0);
-        ib.iload(1);
-        ib.aaload();
-        ib.checkCast("java/lang/String");
-        ib.areturn();
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local constants = ib.getLocal("constants", "[Ljava/lang/Object;", 0);
+        Local index = ib.getLocal("index", "I", 1);
+        ib.returnValue(AdvInsnBuilder.cast(AdvInsnBuilder.arrayAt(constants, index), "java/lang/String"));
         return method;
     }
 
@@ -623,37 +581,25 @@ public class VMGenerator extends ClassObj
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
                 vmLayout.methodType.name(),
                 vmLayout.methodType.descriptor());
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        int cached = 1;
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local descriptor = ib.getLocal("descriptor", "java/lang/String", 0);
+        Local cached = ib.getLocal("cached", "java/lang/invoke/MethodType", 1);
 
-        vmLayout.methodTypes.getStatic(ib);
-        ib.aload(0);
-        ib.invokeInterface("java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
-        ib.checkCast("java/lang/invoke/MethodType");
-        ib.astore(cached);
+        ib.set(cached, AdvInsnBuilder.cast(mapGet(AdvInsnBuilder.staticField(vmLayout.methodTypes), descriptor), "java/lang/invoke/MethodType"));
+        ib.ifCondition(AdvInsnBuilder.notNull(cached), b -> b.returnValue(cached));
 
-        LabelNode create = new LabelNode();
-        ib.aload(cached);
-        ib.ifNull(create);
-        ib.aload(cached);
-        ib.areturn();
-
-        ib.label(create);
-        ib.aload(0);
-        ib.ldc(org.objectweb.asm.Type.getObjectType(className()));
-        ib.invokeVirtual("java/lang/Class", "getClassLoader", "()Ljava/lang/ClassLoader;");
-        ib.invokeStatic(
+        ib.set(cached, AdvInsnBuilder.callStatic(
                 "java/lang/invoke/MethodType",
                 "fromMethodDescriptorString",
-                "(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType;");
-        ib.astore(cached);
-        vmLayout.methodTypes.getStatic(ib);
-        ib.aload(0);
-        ib.aload(cached);
-        ib.invokeInterface("java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-        ib.pop();
-        ib.aload(cached);
-        ib.areturn();
+                "java/lang/invoke/MethodType",
+                descriptor,
+                AdvInsnBuilder.callVirtual(
+                        AdvInsnBuilder.constant(org.objectweb.asm.Type.getObjectType(className())),
+                        "java/lang/Class",
+                        "getClassLoader",
+                        "java/lang/ClassLoader")));
+        ib.directCall(mapPut(AdvInsnBuilder.staticField(vmLayout.methodTypes), descriptor, cached));
+        ib.returnValue(cached);
         return method;
     }
 
@@ -663,98 +609,71 @@ public class VMGenerator extends ClassObj
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
                 vmLayout.resolveConstant.name(),
                 vmLayout.resolveConstant.descriptor());
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        int encoded = 2;
-        int descriptor = 3;
-        int loader = 4;
-        int receiver = 5;
-        LabelNode notEncoded = new LabelNode();
-        LabelNode notTypeConstant = new LabelNode();
-        LabelNode classType = new LabelNode();
-        LabelNode loaderReady = new LabelNode();
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local value = ib.getLocal("value", "java/lang/Object", 0);
+        Local frame = ib.getLocal("frame", frameLayout.owner, 1);
+        Local encoded = ib.getLocal("encoded", "[Ljava/lang/Object;", 2);
+        Local descriptor = ib.getLocal("descriptor", "java/lang/String", 3);
+        Local loader = ib.getLocal("loader", "java/lang/ClassLoader", 4);
+        Local receiver = ib.getLocal("receiver", "java/lang/Object", 5);
 
-        ib.aload(0);
-        ib.instanceOf("[Ljava/lang/Object;");
-        ib.ifeq(notEncoded);
-        ib.aload(0);
-        ib.checkCast("[Ljava/lang/Object;");
-        ib.astore(encoded);
+        ib.ifCondition(AdvInsnBuilder.not(AdvInsnBuilder.isInstanceOf(value, "[Ljava/lang/Object;")), b -> b.returnValue(value));
+        ib.set(encoded, AdvInsnBuilder.cast(value, "[Ljava/lang/Object;"));
+        ib.ifCondition(AdvInsnBuilder.notEqual(AdvInsnBuilder.arrayLength(encoded), AdvInsnBuilder.constant(2)), b -> b.returnValue(value));
+        ib.ifCondition(
+                AdvInsnBuilder.isFalse(AdvInsnBuilder.callVirtual(
+                        AdvInsnBuilder.constant("__BytecodeVM_TYPE__"),
+                        "java/lang/String",
+                        "equals",
+                        "Z",
+                        AdvInsnBuilder.arrayAt(encoded, AdvInsnBuilder.constant(0)))),
+                b -> b.returnValue(value));
+        ib.ifCondition(
+                AdvInsnBuilder.not(AdvInsnBuilder.isInstanceOf(AdvInsnBuilder.arrayAt(encoded, AdvInsnBuilder.constant(1)), "java/lang/String")),
+                b -> b.returnValue(value));
 
-        ib.aload(encoded);
-        ib.arrayLength();
-        ib.iconst2();
-        ib.ifIcmpNe(notEncoded);
-        ib.ldc("__BytecodeVM_TYPE__");
-        ib.aload(encoded);
-        ib.iconst0();
-        ib.aaload();
-        ib.invokeVirtual("java/lang/String", "equals", "(Ljava/lang/Object;)Z");
-        ib.ifeq(notEncoded);
-        ib.aload(encoded);
-        ib.iconst1();
-        ib.aaload();
-        ib.instanceOf("java/lang/String");
-        ib.ifeq(notEncoded);
+        ib.set(descriptor, AdvInsnBuilder.cast(AdvInsnBuilder.arrayAt(encoded, AdvInsnBuilder.constant(1)), "java/lang/String"));
+        ib.set(loader, AdvInsnBuilder.callVirtual(
+                AdvInsnBuilder.constant(org.objectweb.asm.Type.getObjectType(className())),
+                "java/lang/Class",
+                "getClassLoader",
+                "java/lang/ClassLoader"));
+        ib.ifCondition(
+                AdvInsnBuilder.greaterThan(AdvInsnBuilder.arrayLength(AdvInsnBuilder.field(frame, frameLayout.locals)), AdvInsnBuilder.constant(0)),
+                b -> {
+                    b.set(receiver, AdvInsnBuilder.arrayAt(AdvInsnBuilder.field(frame, frameLayout.locals), AdvInsnBuilder.constant(0)));
+                    b.ifCondition(
+                            AdvInsnBuilder.notNull(receiver),
+                            bb -> bb.set(loader, AdvInsnBuilder.callVirtual(
+                                    AdvInsnBuilder.callVirtual(receiver, "java/lang/Object", "getClass", "java/lang/Class"),
+                                    "java/lang/Class",
+                                    "getClassLoader",
+                                    "java/lang/ClassLoader")));
+                });
 
-        ib.aload(encoded);
-        ib.iconst1();
-        ib.aaload();
-        ib.checkCast("java/lang/String");
-        ib.astore(descriptor);
-
-        ib.ldc(org.objectweb.asm.Type.getObjectType(className()));
-        ib.invokeVirtual("java/lang/Class", "getClassLoader", "()Ljava/lang/ClassLoader;");
-        ib.astore(loader);
-        ib.aload(1);
-        frameLayout.locals.get(ib);
-        ib.arrayLength();
-        ib.ifle(loaderReady);
-        ib.aload(1);
-        frameLayout.locals.get(ib);
-        ib.iconst0();
-        ib.aaload();
-        ib.astore(receiver);
-        ib.aload(receiver);
-        ib.ifNull(loaderReady);
-        ib.aload(receiver);
-        ib.invokeVirtual("java/lang/Object", "getClass", "()Ljava/lang/Class;");
-        ib.invokeVirtual("java/lang/Class", "getClassLoader", "()Ljava/lang/ClassLoader;");
-        ib.astore(loader);
-        ib.label(loaderReady);
-
-        ib.aload(descriptor);
-        ib.invokeVirtual("java/lang/String", "length", "()I");
-        ib.ifeq(notTypeConstant);
-        ib.aload(descriptor);
-        ib.iconst0();
-        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
-        ib.bipush('(');
-        ib.ifIcmpNe(classType);
-
-        ib.aload(descriptor);
-        ib.aload(loader);
-        ib.invokeStatic(
-                "java/lang/invoke/MethodType",
-                "fromMethodDescriptorString",
-                "(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/invoke/MethodType;");
-        ib.areturn();
-
-        ib.label(classType);
-        ib.aload(descriptor);
-        ib.aload(loader);
-        vmLayout.loadOwnerWithLoader.invokeStatic(ib);
-        ib.areturn();
-
-        ib.label(notTypeConstant);
-        ib.new_("java/lang/IllegalStateException");
-        ib.dup();
-        ib.ldc("Invalid encoded VM type constant");
-        ib.invokeSpecial("java/lang/IllegalStateException", "<init>", "(Ljava/lang/String;)V");
-        ib.athrow();
-
-        ib.label(notEncoded);
-        ib.aload(0);
-        ib.areturn();
+        ib.ifCondition(
+                AdvInsnBuilder.equal(
+                        AdvInsnBuilder.callVirtual(descriptor, "java/lang/String", "length", "I"),
+                        AdvInsnBuilder.constant(0)),
+                b -> b.throwValue(AdvInsnBuilder.newObject(
+                        "java/lang/IllegalStateException",
+                        AdvInsnBuilder.constant("Invalid encoded VM type constant"))));
+        ib.ifElse(
+                AdvInsnBuilder.equal(
+                        AdvInsnBuilder.callVirtual(descriptor, "java/lang/String", "charAt", "C", AdvInsnBuilder.constant(0)),
+                        AdvInsnBuilder.constant('(')),
+                b -> b.returnValue(AdvInsnBuilder.callStatic(
+                        "java/lang/invoke/MethodType",
+                        "fromMethodDescriptorString",
+                        "java/lang/invoke/MethodType",
+                        descriptor,
+                        loader)),
+                b -> b.returnValue(AdvInsnBuilder.callStatic(
+                        vmLayout.owner,
+                        vmLayout.loadOwnerWithLoader.name(),
+                        "java/lang/Class",
+                        descriptor,
+                        loader)));
         return method;
     }
 
@@ -764,75 +683,49 @@ public class VMGenerator extends ClassObj
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
                 "findExceptionHandler",
                 "(Ljava/lang/Throwable;[II[Ljava/lang/Object;)I");
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        int throwable = 0;
-        int handlers = 1;
-        int instructionPc = 2;
-        int constants = 3;
-        int index = 4;
-        int typeIndex = 5;
-        LabelNode loop = new LabelNode();
-        LabelNode noMatch = new LabelNode();
-        LabelNode next = new LabelNode();
-        LabelNode catchAll = new LabelNode();
-        LabelNode typeMatches = new LabelNode();
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local throwable = ib.getLocal("throwable", "java/lang/Throwable", 0);
+        Local handlers = ib.getLocal("handlers", "[I", 1);
+        Local instructionPc = ib.getLocal("instructionPc", "I", 2);
+        Local constants = ib.getLocal("constants", "[Ljava/lang/Object;", 3);
+        Local index = ib.getLocal("index", "I", 4);
+        Local typeIndex = ib.getLocal("typeIndex", "I", 5);
 
-        ib.iconst0();
-        ib.istore(index);
-        ib.label(loop);
-        ib.iload(index);
-        ib.aload(handlers);
-        ib.arrayLength();
-        ib.ifIcmpGe(noMatch);
-
-        ib.iload(instructionPc);
-        ib.aload(handlers);
-        ib.iload(index);
-        ib.iaload();
-        ib.ifIcmpLt(next);
-
-        ib.iload(instructionPc);
-        ib.aload(handlers);
-        ib.iload(index);
-        ib.iconst1();
-        ib.iadd();
-        ib.iaload();
-        ib.ifIcmpGe(next);
-
-        ib.aload(handlers);
-        ib.iload(index);
-        ib.iconst3();
-        ib.iadd();
-        ib.iaload();
-        ib.istore(typeIndex);
-        ib.iload(typeIndex);
-        ib.iflt(catchAll);
-
-        ib.aload(constants);
-        ib.iload(typeIndex);
-        vmLayout.constantString.invokeStatic(ib);
-        vmLayout.loadOwner.invokeStatic(ib);
-        ib.aload(throwable);
-        ib.invokeVirtual("java/lang/Class", "isInstance", "(Ljava/lang/Object;)Z");
-        ib.ifne(typeMatches);
-        ib.goto_(next);
-
-        ib.label(catchAll);
-        ib.label(typeMatches);
-        ib.aload(handlers);
-        ib.iload(index);
-        ib.iconst2();
-        ib.iadd();
-        ib.iaload();
-        ib.ireturn();
-
-        ib.label(next);
-        ib.iinc(index, 4);
-        ib.goto_(loop);
-
-        ib.label(noMatch);
-        ib.iconstM1();
-        ib.ireturn();
+        ib.forLoop(
+                b -> b.set(index, AdvInsnBuilder.constant(0)),
+                AdvInsnBuilder.lessThan(index, AdvInsnBuilder.arrayLength(handlers)),
+                b -> b.increment(index, 4),
+                b -> {
+                    Expr startPc = AdvInsnBuilder.arrayAt(handlers, index);
+                    Expr endPc = AdvInsnBuilder.arrayAt(handlers, AdvInsnBuilder.plus(index, AdvInsnBuilder.constant(1)));
+                    Expr handlerPc = AdvInsnBuilder.arrayAt(handlers, AdvInsnBuilder.plus(index, AdvInsnBuilder.constant(2)));
+                    b.ifCondition(
+                            AdvInsnBuilder.and(
+                                    AdvInsnBuilder.greaterOrEqual(instructionPc, startPc),
+                                    AdvInsnBuilder.lessThan(instructionPc, endPc)),
+                            inRange -> {
+                                inRange.set(typeIndex, AdvInsnBuilder.arrayAt(handlers, AdvInsnBuilder.plus(index, AdvInsnBuilder.constant(3))));
+                                inRange.ifCondition(AdvInsnBuilder.lessThan(typeIndex, AdvInsnBuilder.constant(0)), catchAll -> catchAll.returnValue(handlerPc));
+                                inRange.ifCondition(
+                                        AdvInsnBuilder.isTrue(AdvInsnBuilder.callVirtual(
+                                                AdvInsnBuilder.callStatic(
+                                                        vmLayout.owner,
+                                                        vmLayout.loadOwner.name(),
+                                                        "java/lang/Class",
+                                                        AdvInsnBuilder.callStatic(
+                                                                vmLayout.owner,
+                                                                vmLayout.constantString.name(),
+                                                                "java/lang/String",
+                                                                constants,
+                                                                typeIndex)),
+                                                "java/lang/Class",
+                                                "isInstance",
+                                                "Z",
+                                                AdvInsnBuilder.cast(throwable, "java/lang/Object"))),
+                                        typeMatches -> typeMatches.returnValue(handlerPc));
+                            });
+                });
+        ib.returnValue(AdvInsnBuilder.constant(-1));
         return method;
     }
 
@@ -842,36 +735,22 @@ public class VMGenerator extends ClassObj
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
                 vmLayout.getField.name(),
                 vmLayout.getField.descriptor());
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        LabelNode start = new LabelNode();
-        LabelNode end = new LabelNode();
-        LabelNode handler = new LabelNode();
-        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
-                start, end, handler, "java/lang/Throwable"));
-
-        ib.label(start);
-        ib.aload(0);
-        ib.aload(1);
-        ib.aload(2);
-        ib.iload(3);
-        ib.iconst0();
-        ib.invokeStatic(
-                className(),
-                "fieldHandle",
-                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZZ)Ljava/lang/invoke/MethodHandle;");
-        ib.aload(4);
-        ib.invokeVirtual(
-                "java/lang/invoke/MethodHandle",
-                "invokeExact",
-                "(Ljava/lang/Object;)Ljava/lang/Object;");
-        ib.label(end);
-        ib.areturn();
-
-        ib.label(handler);
-        ib.astore(5);
-        ib.aload(5);
-        vmLayout.rethrow.invokeStatic(ib);
-        ib.athrow();
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local owner = ib.getLocal("owner", "java/lang/String", 0);
+        Local name = ib.getLocal("name", "java/lang/String", 1);
+        Local descriptor = ib.getLocal("descriptor", "java/lang/String", 2);
+        Local isStatic = ib.getLocal("isStatic", "Z", 3);
+        Local receiver = ib.getLocal("receiver", "java/lang/Object", 4);
+        ib.tryCatch(
+                b -> b.returnValue(AdvInsnBuilder.callVirtual(
+                        fieldHandle(owner, name, descriptor, isStatic, AdvInsnBuilder.constant(false)),
+                        "java/lang/invoke/MethodHandle",
+                        "invokeExact",
+                        "java/lang/Object",
+                        receiver)),
+                "java/lang/Throwable",
+                "throwable",
+                (b) -> b.throwValue(rethrow(b.getLocal("throwable"))));
         return method;
     }
 
@@ -881,46 +760,33 @@ public class VMGenerator extends ClassObj
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
                 vmLayout.setField.name(),
                 vmLayout.setField.descriptor());
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        LabelNode start = new LabelNode();
-        LabelNode end = new LabelNode();
-        LabelNode handler = new LabelNode();
-        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
-                start, end, handler, "java/lang/Throwable"));
-
-        ib.label(start);
-        ib.aload(5);
-        ib.aload(2);
-        vmLayout.loadOwner.invokeStatic(ib);
-        ib.invokeStatic(
-                className(),
-                "coerceArgument",
-                "(Ljava/lang/Object;Ljava/lang/Class;)Ljava/lang/Object;");
-        ib.astore(5);
-
-        ib.aload(0);
-        ib.aload(1);
-        ib.aload(2);
-        ib.iload(3);
-        ib.iconst1();
-        ib.invokeStatic(
-                className(),
-                "fieldHandle",
-                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZZ)Ljava/lang/invoke/MethodHandle;");
-        ib.aload(4);
-        ib.aload(5);
-        ib.invokeVirtual(
-                "java/lang/invoke/MethodHandle",
-                "invokeExact",
-                "(Ljava/lang/Object;Ljava/lang/Object;)V");
-        ib.label(end);
-        ib._return();
-
-        ib.label(handler);
-        ib.astore(6);
-        ib.aload(6);
-        vmLayout.rethrow.invokeStatic(ib);
-        ib.athrow();
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local owner = ib.getLocal("owner", "java/lang/String", 0);
+        Local name = ib.getLocal("name", "java/lang/String", 1);
+        Local descriptor = ib.getLocal("descriptor", "java/lang/String", 2);
+        Local isStatic = ib.getLocal("isStatic", "Z", 3);
+        Local receiver = ib.getLocal("receiver", "java/lang/Object", 4);
+        Local value = ib.getLocal("value", "java/lang/Object", 5);
+        ib.tryCatch(
+                b -> {
+                    b.set(value, AdvInsnBuilder.callStatic(
+                            vmLayout.owner,
+                            vmLayout.coerceArgument.name(),
+                            "java/lang/Object",
+                            value,
+                            AdvInsnBuilder.callStatic(vmLayout.owner, vmLayout.loadOwner.name(), "java/lang/Class", descriptor)));
+                    b.directCall(AdvInsnBuilder.callVirtual(
+                            fieldHandle(owner, name, descriptor, isStatic, AdvInsnBuilder.constant(true)),
+                            "java/lang/invoke/MethodHandle",
+                            "invokeExact",
+                            "V",
+                            receiver,
+                            value));
+                    b.returnVoid();
+                },
+                "java/lang/Throwable",
+                "throwable",
+                b -> b.throwValue(rethrow(b.getLocal("throwable"))));
         return method;
     }
 
@@ -928,97 +794,60 @@ public class VMGenerator extends ClassObj
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
-                "fieldHandle",
-                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZZ)Ljava/lang/invoke/MethodHandle;");
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        int key = 5;
-        int cached = 6;
-        int ownerClass = 7;
-        int fieldType = 8;
-        int field = 9;
-        int handle = 10;
-        int exception = 11;
+                vmLayout.fieldHandle.name(),
+                vmLayout.fieldHandle.descriptor());
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local owner = ib.getLocal("owner", "java/lang/String", 0);
+        Local name = ib.getLocal("name", "java/lang/String", 1);
+        Local descriptor = ib.getLocal("descriptor", "java/lang/String", 2);
+        Local isStatic = ib.getLocal("isStatic", "Z", 3);
+        Local setter = ib.getLocal("setter", "Z", 4);
+        Local key = ib.getLocal("key", "java/lang/String", 5);
+        Local cached = ib.getLocal("cached", "java/lang/invoke/MethodHandle", 6);
+        Local ownerClass = ib.getLocal("ownerClass", "java/lang/Class", 7);
+        Local fieldType = ib.getLocal("fieldType", "java/lang/Class", 8);
+        Local field = ib.getLocal("field", "java/lang/reflect/Field", 9);
+        Local handle = ib.getLocal("handle", "java/lang/invoke/MethodHandle", 10);
 
-        emitFieldHandleKey(ib);
-        ib.astore(key);
-        vmLayout.fieldHandles.getStatic(ib);
-        ib.aload(key);
-        ib.invokeInterface("java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
-        ib.checkCast("java/lang/invoke/MethodHandle");
-        ib.astore(cached);
-        LabelNode create = new LabelNode();
-        ib.aload(cached);
-        ib.ifNull(create);
-        ib.aload(cached);
-        ib.areturn();
+        ib.set(key, fieldHandleKey(owner, name, descriptor, isStatic, setter));
+        ib.set(cached, AdvInsnBuilder.cast(mapGet(AdvInsnBuilder.staticField(vmLayout.fieldHandles), key), "java/lang/invoke/MethodHandle"));
+        ib.ifCondition(AdvInsnBuilder.notNull(cached), b -> b.returnValue(cached));
 
-        LabelNode start = new LabelNode();
-        LabelNode end = new LabelNode();
-        LabelNode handler = new LabelNode();
-        LabelNode fieldTypeMatches = new LabelNode();
-        LabelNode modifiersMatch = new LabelNode();
-        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
-                start, end, handler, "java/lang/ReflectiveOperationException"));
+        ib.tryCatch(
+                b -> {
+                    b.set(ownerClass, AdvInsnBuilder.callStatic(vmLayout.owner, vmLayout.loadOwner.name(), "java/lang/Class", owner));
+                    b.set(fieldType, AdvInsnBuilder.callStatic(vmLayout.owner, vmLayout.loadOwner.name(), "java/lang/Class", descriptor));
+                    b.set(field, AdvInsnBuilder.callStatic(vmLayout.owner, vmLayout.findField.name(), "java/lang/reflect/Field", ownerClass, name));
+                    b.directCall(AdvInsnBuilder.callVirtual(field, "java/lang/reflect/Field", "setAccessible", "V", AdvInsnBuilder.constant(true)));
 
-        ib.label(create);
-        ib.label(start);
-        ib.aload(0);
-        vmLayout.loadOwner.invokeStatic(ib);
-        ib.astore(ownerClass);
+                    b.ifCondition(
+                            AdvInsnBuilder.notEqual(
+                                    AdvInsnBuilder.callVirtual(field, "java/lang/reflect/Field", "getType", "java/lang/Class"),
+                                    fieldType),
+                            mismatch -> throwNoSuchField(mismatch, ownerClass, name));
+                    b.ifCondition(
+                            AdvInsnBuilder.notEqual(
+                                    AdvInsnBuilder.callStatic(
+                                            "java/lang/reflect/Modifier",
+                                            "isStatic",
+                                            "Z",
+                                            AdvInsnBuilder.callVirtual(field, "java/lang/reflect/Field", "getModifiers", "I")),
+                                    isStatic),
+                            mismatch -> throwNoSuchField(mismatch, ownerClass, name));
 
-        ib.aload(2);
-        vmLayout.loadOwner.invokeStatic(ib);
-        ib.astore(fieldType);
-
-        ib.aload(ownerClass);
-        ib.aload(1);
-        vmLayout.findField.invokeStatic(ib);
-        ib.astore(field);
-        ib.aload(field);
-        ib.iconst1();
-        ib.invokeVirtual("java/lang/reflect/Field", "setAccessible", "(Z)V");
-
-        ib.aload(field);
-        ib.invokeVirtual("java/lang/reflect/Field", "getType", "()Ljava/lang/Class;");
-        ib.aload(fieldType);
-        ib.ifAcmpEq(fieldTypeMatches);
-        emitNoSuchField(ib, ownerClass);
-
-        ib.label(fieldTypeMatches);
-        ib.aload(field);
-        ib.invokeVirtual("java/lang/reflect/Field", "getModifiers", "()I");
-        ib.invokeStatic("java/lang/reflect/Modifier", "isStatic", "(I)Z");
-        ib.iload(3);
-        ib.ifIcmpEq(modifiersMatch);
-        emitNoSuchField(ib, ownerClass);
-
-        ib.label(modifiersMatch);
-        ib.aload(field);
-        ib.iload(3);
-        ib.iload(4);
-        ib.invokeStatic(
-                className(),
-                "adaptFieldHandle",
-                "(Ljava/lang/reflect/Field;ZZ)Ljava/lang/invoke/MethodHandle;");
-        ib.astore(handle);
-
-        vmLayout.fieldHandles.getStatic(ib);
-        ib.aload(key);
-        ib.aload(handle);
-        ib.invokeInterface(
-                "java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-        ib.pop();
-        ib.label(end);
-        ib.aload(handle);
-        ib.areturn();
-
-        ib.label(handler);
-        ib.astore(exception);
-        ib.new_("java/lang/IllegalStateException");
-        ib.dup();
-        ib.aload(exception);
-        ib.invokeSpecial("java/lang/IllegalStateException", "<init>", "(Ljava/lang/Throwable;)V");
-        ib.athrow();
+                    b.set(handle, AdvInsnBuilder.callStatic(
+                            vmLayout.owner,
+                            vmLayout.adaptFieldHandle.name(),
+                            "java/lang/invoke/MethodHandle",
+                            field,
+                            isStatic,
+                            setter));
+                    b.directCall(mapPut(AdvInsnBuilder.staticField(vmLayout.fieldHandles), key, handle));
+                    b.returnValue(handle);
+                },
+                "java/lang/ReflectiveOperationException",
+                "exception",
+                b -> b.throwValue(AdvInsnBuilder.newObject("java/lang/IllegalStateException", b.getLocal("exception"))));
         return method;
     }
 
@@ -1026,56 +855,47 @@ public class VMGenerator extends ClassObj
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
-                "adaptFieldHandle",
-                "(Ljava/lang/reflect/Field;ZZ)Ljava/lang/invoke/MethodHandle;",
+                vmLayout.adaptFieldHandle.name(),
+                vmLayout.adaptFieldHandle.descriptor(),
                 new String[]{"java/lang/IllegalAccessException"});
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        int handle = 3;
-        LabelNode setter = new LabelNode();
-        LabelNode getterInstance = new LabelNode();
-        LabelNode setterInstance = new LabelNode();
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local field = ib.getLocal("field", "java/lang/reflect/Field", 0);
+        Local isStatic = ib.getLocal("isStatic", "Z", 1);
+        Local setter = ib.getLocal("setter", "Z", 2);
+        Local handle = ib.getLocal("handle", "java/lang/invoke/MethodHandle", 3);
 
-        ib.iload(2);
-        ib.ifne(setter);
-
-        ib.invokeStatic("java/lang/invoke/MethodHandles", "lookup", "()Ljava/lang/invoke/MethodHandles$Lookup;");
-        ib.aload(0);
-        ib.invokeVirtual(
-                "java/lang/invoke/MethodHandles$Lookup",
-                "unreflectGetter",
-                "(Ljava/lang/reflect/Field;)Ljava/lang/invoke/MethodHandle;");
-        ib.astore(handle);
-        ib.iload(1);
-        ib.ifeq(getterInstance);
-        emitDropLeadingObjectArgument(ib, handle);
-        ib.label(getterInstance);
-        ib.aload(handle);
-        emitGetterHandleType(ib);
-        ib.invokeVirtual(
-                "java/lang/invoke/MethodHandle",
-                "asType",
-                "(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
-        ib.areturn();
-
-        ib.label(setter);
-        ib.invokeStatic("java/lang/invoke/MethodHandles", "lookup", "()Ljava/lang/invoke/MethodHandles$Lookup;");
-        ib.aload(0);
-        ib.invokeVirtual(
-                "java/lang/invoke/MethodHandles$Lookup",
-                "unreflectSetter",
-                "(Ljava/lang/reflect/Field;)Ljava/lang/invoke/MethodHandle;");
-        ib.astore(handle);
-        ib.iload(1);
-        ib.ifeq(setterInstance);
-        emitDropLeadingObjectArgument(ib, handle);
-        ib.label(setterInstance);
-        ib.aload(handle);
-        emitSetterHandleType(ib);
-        ib.invokeVirtual(
-                "java/lang/invoke/MethodHandle",
-                "asType",
-                "(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
-        ib.areturn();
+        ib.ifElse(
+                AdvInsnBuilder.isFalse(setter),
+                b -> {
+                    b.set(handle, AdvInsnBuilder.callVirtual(
+                            AdvInsnBuilder.callStatic("java/lang/invoke/MethodHandles", "lookup", "java/lang/invoke/MethodHandles$Lookup"),
+                            "java/lang/invoke/MethodHandles$Lookup",
+                            "unreflectGetter",
+                            "java/lang/invoke/MethodHandle",
+                            field));
+                    b.ifCondition(AdvInsnBuilder.isTrue(isStatic), bb -> dropLeadingObjectArgument(bb, handle));
+                    b.returnValue(AdvInsnBuilder.callVirtual(
+                            handle,
+                            "java/lang/invoke/MethodHandle",
+                            "asType",
+                            "java/lang/invoke/MethodHandle",
+                            getterHandleType()));
+                },
+                b -> {
+                    b.set(handle, AdvInsnBuilder.callVirtual(
+                            AdvInsnBuilder.callStatic("java/lang/invoke/MethodHandles", "lookup", "java/lang/invoke/MethodHandles$Lookup"),
+                            "java/lang/invoke/MethodHandles$Lookup",
+                            "unreflectSetter",
+                            "java/lang/invoke/MethodHandle",
+                            field));
+                    b.ifCondition(AdvInsnBuilder.isTrue(isStatic), bb -> dropLeadingObjectArgument(bb, handle));
+                    b.returnValue(AdvInsnBuilder.callVirtual(
+                            handle,
+                            "java/lang/invoke/MethodHandle",
+                            "asType",
+                            "java/lang/invoke/MethodHandle",
+                            methodType(voidClass(), objectClass(), classArray(b, "setterParameters", objectClass()))));
+                });
         return method;
     }
 
@@ -1083,90 +903,48 @@ public class VMGenerator extends ClassObj
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
-                "findField",
-                "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/reflect/Field;",
+                vmLayout.findField.name(),
+                vmLayout.findField.descriptor(),
                 new String[]{"java/lang/NoSuchFieldException"});
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        int interfaces = 2;
-        int index = 3;
-        int found = 4;
-        int superClass = 5;
-        LabelNode declaredStart = new LabelNode();
-        LabelNode declaredEnd = new LabelNode();
-        LabelNode declaredMissing = new LabelNode();
-        LabelNode interfaceLoop = new LabelNode();
-        LabelNode nextInterface = new LabelNode();
-        LabelNode interfacesDone = new LabelNode();
-        LabelNode interfaceStart = new LabelNode();
-        LabelNode interfaceEnd = new LabelNode();
-        LabelNode interfaceMissing = new LabelNode();
-        LabelNode noSuperClass = new LabelNode();
-        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
-                declaredStart,
-                declaredEnd,
-                declaredMissing,
-                "java/lang/NoSuchFieldException"));
-        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
-                interfaceStart,
-                interfaceEnd,
-                interfaceMissing,
-                "java/lang/NoSuchFieldException"));
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local ownerClass = ib.getLocal("ownerClass", "java/lang/Class", 0);
+        Local name = ib.getLocal("name", "java/lang/String", 1);
+        Local interfaces = ib.getLocal("interfaces", "[Ljava/lang/Class;", 2);
+        Local index = ib.getLocal("index", "I", 3);
+        Local superClass = ib.getLocal("superClass", "java/lang/Class", 5);
 
-        ib.label(declaredStart);
-        ib.aload(0);
-        ib.aload(1);
-        ib.invokeVirtual("java/lang/Class", "getDeclaredField", "(Ljava/lang/String;)Ljava/lang/reflect/Field;");
-        ib.label(declaredEnd);
-        ib.areturn();
+        ib.tryCatch(
+                b -> b.returnValue(AdvInsnBuilder.callVirtual(
+                        ownerClass,
+                        "java/lang/Class",
+                        "getDeclaredField",
+                        "java/lang/reflect/Field",
+                        name)),
+                "java/lang/NoSuchFieldException",
+                "ignored",
+                b -> {});
 
-        ib.label(declaredMissing);
-        ib.pop();
+        ib.set(interfaces, AdvInsnBuilder.callVirtual(ownerClass, "java/lang/Class", "getInterfaces", "[Ljava/lang/Class;"));
+        ib.forLoop(
+                b -> b.set(index, AdvInsnBuilder.constant(0)),
+                AdvInsnBuilder.lessThan(index, AdvInsnBuilder.arrayLength(interfaces)),
+                b -> b.increment(index, 1),
+                b -> b.tryCatch(
+                        tryFind -> tryFind.returnValue(AdvInsnBuilder.callStatic(
+                                vmLayout.owner,
+                                vmLayout.findField.name(),
+                                "java/lang/reflect/Field",
+                                AdvInsnBuilder.arrayAt(interfaces, index),
+                                name)),
+                        "java/lang/NoSuchFieldException",
+                        "ignored",
+                        ignored -> {}));
 
-        ib.aload(0);
-        ib.invokeVirtual("java/lang/Class", "getInterfaces", "()[Ljava/lang/Class;");
-        ib.astore(interfaces);
-        ib.iconst0();
-        ib.istore(index);
-        ib.label(interfaceLoop);
-        ib.iload(index);
-        ib.aload(interfaces);
-        ib.arrayLength();
-        ib.ifIcmpGe(interfacesDone);
-
-        ib.label(interfaceStart);
-        ib.aload(interfaces);
-        ib.iload(index);
-        ib.aaload();
-        ib.aload(1);
-        vmLayout.findField.invokeStatic(ib);
-        ib.astore(found);
-        ib.label(interfaceEnd);
-        ib.aload(found);
-        ib.areturn();
-
-        ib.label(interfaceMissing);
-        ib.pop();
-        ib.label(nextInterface);
-        ib.iinc(index, 1);
-        ib.goto_(interfaceLoop);
-
-        ib.label(interfacesDone);
-        ib.aload(0);
-        ib.invokeVirtual("java/lang/Class", "getSuperclass", "()Ljava/lang/Class;");
-        ib.astore(superClass);
-        ib.aload(superClass);
-        ib.ifNull(noSuperClass);
-        ib.aload(superClass);
-        ib.aload(1);
-        vmLayout.findField.invokeStatic(ib);
-        ib.areturn();
-
-        ib.label(noSuperClass);
-        ib.new_("java/lang/NoSuchFieldException");
-        ib.dup();
-        ib.aload(1);
-        ib.invokeSpecial("java/lang/NoSuchFieldException", "<init>", "(Ljava/lang/String;)V");
-        ib.athrow();
+        ib.set(superClass, AdvInsnBuilder.callVirtual(ownerClass, "java/lang/Class", "getSuperclass", "java/lang/Class"));
+        ib.ifCondition(
+                AdvInsnBuilder.notNull(superClass),
+                b -> b.returnValue(AdvInsnBuilder.callStatic(vmLayout.owner, vmLayout.findField.name(), "java/lang/reflect/Field", superClass, name)));
+        ib.throwValue(AdvInsnBuilder.newObject("java/lang/NoSuchFieldException", name));
         return method;
     }
 
@@ -1174,110 +952,56 @@ public class VMGenerator extends ClassObj
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
-                "findMethod",
-                "(Ljava/lang/Class;Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;",
+                vmLayout.findMethod.name(),
+                vmLayout.findMethod.descriptor(),
                 new String[]{"java/lang/NoSuchMethodException"});
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        int interfaces = 3;
-        int index = 4;
-        int found = 5;
-        int superClass = 6;
-        LabelNode declaredStart = new LabelNode();
-        LabelNode declaredEnd = new LabelNode();
-        LabelNode declaredMissing = new LabelNode();
-        LabelNode interfaceLoop = new LabelNode();
-        LabelNode nextInterface = new LabelNode();
-        LabelNode interfacesDone = new LabelNode();
-        LabelNode interfaceStart = new LabelNode();
-        LabelNode interfaceEnd = new LabelNode();
-        LabelNode interfaceMissing = new LabelNode();
-        LabelNode noSuperClass = new LabelNode();
-        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
-                declaredStart,
-                declaredEnd,
-                declaredMissing,
-                "java/lang/NoSuchMethodException"));
-        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
-                interfaceStart,
-                interfaceEnd,
-                interfaceMissing,
-                "java/lang/NoSuchMethodException"));
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local ownerClass = ib.getLocal("ownerClass", "java/lang/Class", 0);
+        Local name = ib.getLocal("name", "java/lang/String", 1);
+        Local parameterTypes = ib.getLocal("parameterTypes", "[Ljava/lang/Class;", 2);
+        Local interfaces = ib.getLocal("interfaces", "[Ljava/lang/Class;", 3);
+        Local index = ib.getLocal("index", "I", 4);
+        Local superClass = ib.getLocal("superClass", "java/lang/Class", 6);
 
-        ib.label(declaredStart);
-        ib.aload(0);
-        ib.aload(1);
-        ib.aload(2);
-        ib.invokeVirtual(
-                "java/lang/Class",
-                "getDeclaredMethod",
-                "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
-        ib.label(declaredEnd);
-        ib.areturn();
+        ib.tryCatch(
+                b -> b.returnValue(AdvInsnBuilder.callVirtual(
+                        ownerClass,
+                        "java/lang/Class",
+                        "getDeclaredMethod",
+                        "java/lang/reflect/Method",
+                        name,
+                        parameterTypes)),
+                "java/lang/NoSuchMethodException",
+                "ignored",
+                b -> {});
 
-        ib.label(declaredMissing);
-        ib.pop();
+        ib.set(interfaces, AdvInsnBuilder.callVirtual(ownerClass, "java/lang/Class", "getInterfaces", "[Ljava/lang/Class;"));
+        ib.forLoop(
+                b -> b.set(index, AdvInsnBuilder.constant(0)),
+                AdvInsnBuilder.lessThan(index, AdvInsnBuilder.arrayLength(interfaces)),
+                b -> b.increment(index, 1),
+                b -> b.tryCatch(
+                        tryFind -> tryFind.returnValue(AdvInsnBuilder.callStatic(
+                                vmLayout.owner,
+                                vmLayout.findMethod.name(),
+                                "java/lang/reflect/Method",
+                                AdvInsnBuilder.arrayAt(interfaces, index),
+                                name,
+                                parameterTypes)),
+                        "java/lang/NoSuchMethodException",
+                        "ignored",
+                        ignored -> {}));
 
-        ib.aload(0);
-        ib.invokeVirtual("java/lang/Class", "getInterfaces", "()[Ljava/lang/Class;");
-        ib.astore(interfaces);
-        ib.iconst0();
-        ib.istore(index);
-        ib.label(interfaceLoop);
-        ib.iload(index);
-        ib.aload(interfaces);
-        ib.arrayLength();
-        ib.ifIcmpGe(interfacesDone);
-
-        ib.label(interfaceStart);
-        ib.aload(interfaces);
-        ib.iload(index);
-        ib.aaload();
-        ib.aload(1);
-        ib.aload(2);
-        ib.invokeStatic(
-                className(),
-                "findMethod",
-                "(Ljava/lang/Class;Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
-        ib.astore(found);
-        ib.label(interfaceEnd);
-        ib.aload(found);
-        ib.areturn();
-
-        ib.label(interfaceMissing);
-        ib.pop();
-        ib.label(nextInterface);
-        ib.iinc(index, 1);
-        ib.goto_(interfaceLoop);
-
-        ib.label(interfacesDone);
-        ib.aload(0);
-        ib.invokeVirtual("java/lang/Class", "getSuperclass", "()Ljava/lang/Class;");
-        ib.astore(superClass);
-        ib.aload(superClass);
-        ib.ifNull(noSuperClass);
-        ib.aload(superClass);
-        ib.aload(1);
-        ib.aload(2);
-        ib.invokeStatic(
-                className(),
-                "findMethod",
-                "(Ljava/lang/Class;Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
-        ib.areturn();
-
-        ib.label(noSuperClass);
-        ib.new_("java/lang/NoSuchMethodException");
-        ib.dup();
-        ib.new_("java/lang/StringBuilder");
-        ib.dup();
-        ib.aload(0);
-        ib.invokeVirtual("java/lang/Class", "getName", "()Ljava/lang/String;");
-        ib.invokeSpecial("java/lang/StringBuilder", "<init>", "(Ljava/lang/String;)V");
-        appendString(ib, ".");
-        ib.aload(1);
-        ib.invokeVirtual("java/lang/StringBuilder", "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
-        ib.invokeVirtual("java/lang/StringBuilder", "toString", "()Ljava/lang/String;");
-        ib.invokeSpecial("java/lang/NoSuchMethodException", "<init>", "(Ljava/lang/String;)V");
-        ib.athrow();
+        ib.set(superClass, AdvInsnBuilder.callVirtual(ownerClass, "java/lang/Class", "getSuperclass", "java/lang/Class"));
+        ib.ifCondition(
+                AdvInsnBuilder.notNull(superClass),
+                b -> b.returnValue(AdvInsnBuilder.callStatic(vmLayout.owner, vmLayout.findMethod.name(), "java/lang/reflect/Method", superClass, name, parameterTypes)));
+        ib.throwValue(AdvInsnBuilder.newObject(
+                "java/lang/NoSuchMethodException",
+                stringConcat(
+                        AdvInsnBuilder.callVirtual(ownerClass, "java/lang/Class", "getName", "java/lang/String"),
+                        AdvInsnBuilder.constant("."),
+                        name)));
         return method;
     }
 
@@ -1287,193 +1011,111 @@ public class VMGenerator extends ClassObj
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
                 "invoke",
                 "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/invoke/MethodType;ZLjava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        int key = 6;
-        int target = 7;
-        int ownerClass = 8;
-        int exception = 9;
-        int reflectedMethod = 10;
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local owner = ib.getLocal("owner", "java/lang/String", 0);
+        Local name = ib.getLocal("name", "java/lang/String", 1);
+        Local methodType = ib.getLocal("methodType", "java/lang/invoke/MethodType", 2);
+        Local isStatic = ib.getLocal("isStatic", "Z", 3);
+        Local receiver = ib.getLocal("receiver", "java/lang/Object", 4);
+        Local arguments = ib.getLocal("arguments", "[Ljava/lang/Object;", 5);
+        Local key = ib.getLocal("key", "java/lang/String", 6);
+        Local target = ib.getLocal("target", "java/lang/invoke/MethodHandle", 7);
+        Local ownerClass = ib.getLocal("ownerClass", "java/lang/Class", 8);
+        Local exception = ib.getLocal("exception", "java/lang/Throwable", 9);
+        Local reflectedMethod = ib.getLocal("reflectedMethod", "java/lang/reflect/Method", 10);
 
-        LabelNode normalInvoke = new LabelNode();
-        ib.iload(3);
-        ib.ifne(normalInvoke);
-        ib.aload(1);
-        ib.ldc("clone");
-        ib.invokeVirtual("java/lang/String", "equals", "(Ljava/lang/Object;)Z");
-        ib.ifeq(normalInvoke);
-        ib.aload(2);
-        ib.invokeVirtual("java/lang/invoke/MethodType", "parameterCount", "()I");
-        ib.ifne(normalInvoke);
-        ib.aload(4);
-        ib.invokeVirtual("java/lang/Object", "getClass", "()Ljava/lang/Class;");
-        ib.invokeVirtual("java/lang/Class", "isArray", "()Z");
-        ib.ifeq(normalInvoke);
-        ib.aload(4);
-        vmLayout.cloneArray.invokeStatic(ib);
-        ib.areturn();
-        ib.label(normalInvoke);
+        ib.ifCondition(
+                AdvInsnBuilder.and(
+                        AdvInsnBuilder.isFalse(isStatic),
+                        AdvInsnBuilder.and(
+                                AdvInsnBuilder.isTrue(AdvInsnBuilder.callVirtual(
+                                        name,
+                                        "java/lang/String",
+                                        "equals",
+                                        "Z",
+                                        AdvInsnBuilder.cast(AdvInsnBuilder.constant("clone"), "java/lang/Object"))),
+                                AdvInsnBuilder.and(
+                                        AdvInsnBuilder.equal(
+                                                AdvInsnBuilder.callVirtual(methodType, "java/lang/invoke/MethodType", "parameterCount", "I"),
+                                                AdvInsnBuilder.constant(0)),
+                                        AdvInsnBuilder.isTrue(AdvInsnBuilder.callVirtual(
+                                                AdvInsnBuilder.callVirtual(receiver, "java/lang/Object", "getClass", "java/lang/Class"),
+                                                "java/lang/Class",
+                                                "isArray",
+                                                "Z"))))),
+                b -> b.returnValue(AdvInsnBuilder.callStatic(vmLayout.owner, vmLayout.cloneArray.name(), "java/lang/Object", receiver)));
 
-        emitMethodHandleKey(ib);
-        ib.astore(key);
-        vmLayout.methodHandles.getStatic(ib);
-        ib.aload(key);
-        ib.invokeInterface("java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
-        ib.checkCast("java/lang/invoke/MethodHandle");
-        ib.astore(target);
+        ib.set(key, methodHandleKey(owner, name, methodType, isStatic));
+        ib.set(target, AdvInsnBuilder.cast(mapGet(AdvInsnBuilder.staticField(vmLayout.methodHandles), key), "java/lang/invoke/MethodHandle"));
 
-        LabelNode methodReady = new LabelNode();
-        ib.aload(target);
-        ib.ifNonNull(methodReady);
+        ib.ifCondition(
+                AdvInsnBuilder.isNull(target),
+                b -> {
+                    b.set(ownerClass, AdvInsnBuilder.nullValue("java/lang/Class"));
+                    b.set(exception, AdvInsnBuilder.nullValue("java/lang/Throwable"));
+                    b.tryCatch(
+                            tryReflect -> {
+                                tryReflect.set(ownerClass, AdvInsnBuilder.callStatic(vmLayout.owner, vmLayout.loadOwner.name(), "java/lang/Class", owner));
+                                tryReflect.set(reflectedMethod, AdvInsnBuilder.callStatic(
+                                        vmLayout.owner,
+                                        vmLayout.findMethod.name(),
+                                        "java/lang/reflect/Method",
+                                        ownerClass,
+                                        name,
+                                        AdvInsnBuilder.callVirtual(methodType, "java/lang/invoke/MethodType", "parameterArray", "[Ljava/lang/Class;")));
+                                cacheAdaptedMethodHandle(tryReflect, reflectedMethod, ownerClass, name, methodType, isStatic, key, target);
+                            },
+                            "java/lang/Throwable",
+                            "caught",
+                            caught -> caught.set(exception, caught.getLocal("caught")));
 
-        LabelNode reflectionStart = new LabelNode();
-        LabelNode reflectionEnd = new LabelNode();
-        LabelNode reflectionHandler = new LabelNode();
-        LabelNode publicLookupStart = new LabelNode();
-        LabelNode publicLookupEnd = new LabelNode();
-        LabelNode publicLookupHandler = new LabelNode();
-        LabelNode methodFound = new LabelNode();
-        LabelNode returnTypeMatches = new LabelNode();
-        LabelNode modifiersMatch = new LabelNode();
-        LabelNode throwReflectionFailure = new LabelNode();
-        LabelNode cacheMethod = new LabelNode();
-        LabelNode cacheTarget = new LabelNode();
-        LabelNode directLookup = new LabelNode();
-        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
-                reflectionStart,
-                reflectionEnd,
-                reflectionHandler,
-                "java/lang/Throwable"));
-        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
-                publicLookupStart,
-                publicLookupEnd,
-                publicLookupHandler,
-                "java/lang/ReflectiveOperationException"));
+                    b.ifCondition(
+                            AdvInsnBuilder.and(AdvInsnBuilder.isNull(target), AdvInsnBuilder.isInstanceOf(exception, "java/lang/NoSuchMethodException")),
+                            publicLookup -> publicLookup.tryCatch(
+                                    tryPublic -> {
+                                        tryPublic.set(reflectedMethod, AdvInsnBuilder.callVirtual(
+                                                ownerClass,
+                                                "java/lang/Class",
+                                                "getMethod",
+                                                "java/lang/reflect/Method",
+                                                name,
+                                                AdvInsnBuilder.callVirtual(methodType, "java/lang/invoke/MethodType", "parameterArray", "[Ljava/lang/Class;")));
+                                        cacheAdaptedMethodHandle(tryPublic, reflectedMethod, ownerClass, name, methodType, isStatic, key, target);
+                                    },
+                                    "java/lang/ReflectiveOperationException",
+                                    "caught",
+                                    caught -> caught.set(exception, caught.getLocal("caught"))));
 
-        ib.aconstNull();
-        ib.astore(ownerClass);
+                    b.ifCondition(
+                            AdvInsnBuilder.isNull(target),
+                            miss -> miss.ifElse(
+                                    AdvInsnBuilder.isInstanceOf(exception, "java/lang/reflect/InaccessibleObjectException"),
+                                    direct -> {
+                                        direct.set(target, AdvInsnBuilder.callStatic(
+                                                vmLayout.owner,
+                                                vmLayout.adaptDirectMethodHandle.name(),
+                                                "java/lang/invoke/MethodHandle",
+                                                ownerClass,
+                                                name,
+                                                methodType,
+                                                isStatic));
+                                        direct.directCall(mapPut(AdvInsnBuilder.staticField(vmLayout.methodHandles), key, target));
+                                    },
+                                    failure -> failure.throwValue(AdvInsnBuilder.newObject("java/lang/IllegalStateException", exception))));
+                });
 
-        ib.label(reflectionStart);
-        ib.aload(0);
-        vmLayout.loadOwner.invokeStatic(ib);
-        ib.astore(ownerClass);
-        ib.aload(ownerClass);
-        ib.aload(1);
-        ib.aload(2);
-        ib.invokeVirtual("java/lang/invoke/MethodType", "parameterArray", "()[Ljava/lang/Class;");
-        ib.invokeStatic(
-                className(),
-                "findMethod",
-                "(Ljava/lang/Class;Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
-        ib.astore(reflectedMethod);
-        ib.label(methodFound);
-        ib.aload(reflectedMethod);
-        ib.iconst1();
-        ib.invokeVirtual("java/lang/reflect/Method", "setAccessible", "(Z)V");
-
-        ib.aload(reflectedMethod);
-        ib.invokeVirtual("java/lang/reflect/Method", "getReturnType", "()Ljava/lang/Class;");
-        ib.aload(2);
-        ib.invokeVirtual("java/lang/invoke/MethodType", "returnType", "()Ljava/lang/Class;");
-        ib.ifAcmpEq(returnTypeMatches);
-        emitNoSuchMethod(ib, ownerClass);
-
-        ib.label(returnTypeMatches);
-        ib.aload(reflectedMethod);
-        ib.invokeVirtual("java/lang/reflect/Method", "getModifiers", "()I");
-        ib.invokeStatic("java/lang/reflect/Modifier", "isStatic", "(I)Z");
-        ib.iload(3);
-        ib.ifIcmpEq(modifiersMatch);
-        emitNoSuchMethod(ib, ownerClass);
-
-        ib.label(modifiersMatch);
-        ib.label(cacheMethod);
-        ib.aload(reflectedMethod);
-        ib.iload(3);
-        ib.aload(2);
-        ib.invokeVirtual("java/lang/invoke/MethodType", "parameterCount", "()I");
-        ib.invokeStatic(
-                className(),
-                "adaptMethodHandle",
-                "(Ljava/lang/reflect/Method;ZI)Ljava/lang/invoke/MethodHandle;");
-        ib.astore(target);
-        ib.label(cacheTarget);
-        vmLayout.methodHandles.getStatic(ib);
-        ib.aload(key);
-        ib.aload(target);
-        ib.invokeInterface(
-                "java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-        ib.pop();
-        ib.label(reflectionEnd);
-        ib.goto_(methodReady);
-
-        ib.label(reflectionHandler);
-        ib.astore(exception);
-        ib.aload(exception);
-        ib.instanceOf("java/lang/NoSuchMethodException");
-        ib.ifeq(directLookup);
-
-        ib.label(publicLookupStart);
-        ib.aload(ownerClass);
-        ib.aload(1);
-        ib.aload(2);
-        ib.invokeVirtual("java/lang/invoke/MethodType", "parameterArray", "()[Ljava/lang/Class;");
-        ib.invokeVirtual(
-                "java/lang/Class",
-                "getMethod",
-                "(Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
-        ib.astore(reflectedMethod);
-        ib.label(publicLookupEnd);
-        ib.goto_(methodFound);
-
-        ib.label(publicLookupHandler);
-        ib.astore(exception);
-
-        ib.label(directLookup);
-        ib.aload(exception);
-        ib.instanceOf("java/lang/reflect/InaccessibleObjectException");
-        ib.ifeq(throwReflectionFailure);
-        ib.aload(ownerClass);
-        ib.aload(1);
-        ib.aload(2);
-        ib.iload(3);
-        ib.invokeStatic(
-                className(),
-                "adaptDirectMethodHandle",
-                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;Z)Ljava/lang/invoke/MethodHandle;");
-        ib.astore(target);
-        ib.goto_(cacheTarget);
-
-        ib.label(throwReflectionFailure);
-        ib.new_("java/lang/IllegalStateException");
-        ib.dup();
-        ib.aload(exception);
-        ib.invokeSpecial("java/lang/IllegalStateException", "<init>", "(Ljava/lang/Throwable;)V");
-        ib.athrow();
-
-        ib.label(methodReady);
-        emitCoerceArguments(ib, 5, 2, 11);
-
-        LabelNode invokeStart = new LabelNode();
-        LabelNode invokeEnd = new LabelNode();
-        LabelNode invokeHandler = new LabelNode();
-        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
-                invokeStart, invokeEnd, invokeHandler, "java/lang/Throwable"));
-        ib.label(invokeStart);
-        ib.aload(target);
-        ib.aload(4);
-        ib.aload(5);
-        ib.invokeVirtual(
-                "java/lang/invoke/MethodHandle",
-                "invokeExact",
-                "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
-        ib.label(invokeEnd);
-        ib.areturn();
-
-        ib.label(invokeHandler);
-        ib.astore(exception);
-        ib.aload(exception);
-        vmLayout.rethrow.invokeStatic(ib);
-        ib.athrow();
+        coerceArguments(ib, arguments, methodType);
+        ib.tryCatch(
+                b -> b.returnValue(AdvInsnBuilder.callVirtual(
+                        target,
+                        "java/lang/invoke/MethodHandle",
+                        "invokeExact",
+                        "java/lang/Object",
+                        receiver,
+                        arguments)),
+                "java/lang/Throwable",
+                "throwable",
+                b -> b.throwValue(rethrow(b.getLocal("throwable"))));
         return method;
     }
 
@@ -1483,112 +1125,54 @@ public class VMGenerator extends ClassObj
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
                 vmLayout.construct.name(),
                 vmLayout.construct.descriptor());
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        int key = 3;
-        int target = 4;
-        int ownerClass = 5;
-        int constructor = 6;
-        int exception = 7;
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local owner = ib.getLocal("owner", "java/lang/String", 0);
+        Local methodType = ib.getLocal("methodType", "java/lang/invoke/MethodType", 1);
+        Local arguments = ib.getLocal("arguments", "[Ljava/lang/Object;", 2);
+        Local key = ib.getLocal("key", "java/lang/String", 3);
+        Local target = ib.getLocal("target", "java/lang/invoke/MethodHandle", 4);
+        Local ownerClass = ib.getLocal("ownerClass", "java/lang/Class", 5);
+        Local constructor = ib.getLocal("constructor", "java/lang/reflect/Constructor", 6);
 
-        ib.new_("java/lang/StringBuilder");
-        ib.dup();
-        ib.ldc("<init>:");
-        ib.invokeSpecial("java/lang/StringBuilder", "<init>", "(Ljava/lang/String;)V");
-        ib.aload(0);
-        ib.invokeVirtual("java/lang/StringBuilder", "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
-        ib.aload(1);
-        ib.invokeVirtual("java/lang/StringBuilder", "append", "(Ljava/lang/Object;)Ljava/lang/StringBuilder;");
-        ib.invokeVirtual("java/lang/StringBuilder", "toString", "()Ljava/lang/String;");
-        ib.astore(key);
+        ib.set(key, stringConcat(AdvInsnBuilder.constant("<init>:"), owner, methodType));
+        ib.set(target, AdvInsnBuilder.cast(mapGet(AdvInsnBuilder.staticField(vmLayout.methodHandles), key), "java/lang/invoke/MethodHandle"));
 
-        vmLayout.methodHandles.getStatic(ib);
-        ib.aload(key);
-        ib.invokeInterface("java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
-        ib.checkCast("java/lang/invoke/MethodHandle");
-        ib.astore(target);
+        ib.ifCondition(
+                AdvInsnBuilder.isNull(target),
+                b -> b.tryCatch(
+                        resolve -> {
+                            resolve.set(ownerClass, AdvInsnBuilder.callStatic(vmLayout.owner, vmLayout.loadOwner.name(), "java/lang/Class", owner));
+                            resolve.set(constructor, AdvInsnBuilder.callVirtual(
+                                    ownerClass,
+                                    "java/lang/Class",
+                                    "getDeclaredConstructor",
+                                    "java/lang/reflect/Constructor",
+                                    AdvInsnBuilder.callVirtual(methodType, "java/lang/invoke/MethodType", "parameterArray", "[Ljava/lang/Class;")));
+                            resolve.directCall(AdvInsnBuilder.callVirtual(constructor, "java/lang/reflect/Constructor", "setAccessible", "V", AdvInsnBuilder.constant(true)));
+                            resolve.set(target, AdvInsnBuilder.callStatic(
+                                    vmLayout.owner,
+                                    vmLayout.adaptConstructorHandle.name(),
+                                    "java/lang/invoke/MethodHandle",
+                                    constructor,
+                                    AdvInsnBuilder.callVirtual(methodType, "java/lang/invoke/MethodType", "parameterCount", "I")));
+                            resolve.directCall(mapPut(AdvInsnBuilder.staticField(vmLayout.methodHandles), key, target));
+                        },
+                        "java/lang/Throwable",
+                        "throwable",
+                        caught -> caught.throwValue(rethrow(caught.getLocal("throwable")))));
 
-        LabelNode targetReady = new LabelNode();
-        ib.aload(target);
-        ib.ifNonNull(targetReady);
-
-        LabelNode resolveStart = new LabelNode();
-        LabelNode resolveEnd = new LabelNode();
-        LabelNode resolveHandler = new LabelNode();
-        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
-                resolveStart,
-                resolveEnd,
-                resolveHandler,
-                "java/lang/Throwable"));
-
-        ib.label(resolveStart);
-        ib.aload(0);
-        vmLayout.loadOwner.invokeStatic(ib);
-        ib.astore(ownerClass);
-
-        ib.aload(ownerClass);
-        ib.aload(1);
-        ib.invokeVirtual("java/lang/invoke/MethodType", "parameterArray", "()[Ljava/lang/Class;");
-        ib.invokeVirtual(
-                "java/lang/Class",
-                "getDeclaredConstructor",
-                "([Ljava/lang/Class;)Ljava/lang/reflect/Constructor;");
-        ib.astore(constructor);
-        ib.aload(constructor);
-        ib.iconst1();
-        ib.invokeVirtual("java/lang/reflect/Constructor", "setAccessible", "(Z)V");
-
-        ib.aload(constructor);
-        ib.aload(1);
-        ib.invokeVirtual("java/lang/invoke/MethodType", "parameterCount", "()I");
-        ib.invokeStatic(
-                className(),
-                "adaptConstructorHandle",
-                "(Ljava/lang/reflect/Constructor;I)Ljava/lang/invoke/MethodHandle;");
-        ib.astore(target);
-
-        vmLayout.methodHandles.getStatic(ib);
-        ib.aload(key);
-        ib.aload(target);
-        ib.invokeInterface(
-                "java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-        ib.pop();
-        ib.label(resolveEnd);
-        ib.goto_(targetReady);
-
-        ib.label(resolveHandler);
-        ib.astore(exception);
-        ib.aload(exception);
-        vmLayout.rethrow.invokeStatic(ib);
-        ib.athrow();
-
-        ib.label(targetReady);
-        emitCoerceArguments(ib, 2, 1, 8);
-
-        LabelNode invokeStart = new LabelNode();
-        LabelNode invokeEnd = new LabelNode();
-        LabelNode invokeHandler = new LabelNode();
-        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
-                invokeStart,
-                invokeEnd,
-                invokeHandler,
-                "java/lang/Throwable"));
-
-        ib.label(invokeStart);
-        ib.aload(target);
-        ib.aconstNull();
-        ib.aload(2);
-        ib.invokeVirtual(
-                "java/lang/invoke/MethodHandle",
-                "invokeExact",
-                "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;");
-        ib.label(invokeEnd);
-        ib.areturn();
-
-        ib.label(invokeHandler);
-        ib.astore(exception);
-        ib.aload(exception);
-        vmLayout.rethrow.invokeStatic(ib);
-        ib.athrow();
+        coerceArguments(ib, arguments, methodType);
+        ib.tryCatch(
+                b -> b.returnValue(AdvInsnBuilder.callVirtual(
+                        target,
+                        "java/lang/invoke/MethodHandle",
+                        "invokeExact",
+                        "java/lang/Object",
+                        AdvInsnBuilder.nullValue("java/lang/Object"),
+                        arguments)),
+                "java/lang/Throwable",
+                "throwable",
+                b -> b.throwValue(rethrow(b.getLocal("throwable"))));
         return method;
     }
 
@@ -1596,43 +1180,33 @@ public class VMGenerator extends ClassObj
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
-                "adaptMethodHandle",
-                "(Ljava/lang/reflect/Method;ZI)Ljava/lang/invoke/MethodHandle;",
+                vmLayout.adaptMethodHandle.name(),
+                vmLayout.adaptMethodHandle.descriptor(),
                 new String[]{"java/lang/IllegalAccessException"});
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        int handle = 3;
-        LabelNode instanceMethod = new LabelNode();
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local methodRef = ib.getLocal("method", "java/lang/reflect/Method", 0);
+        Local isStatic = ib.getLocal("isStatic", "Z", 1);
+        Local parameterCount = ib.getLocal("parameterCount", "I", 2);
+        Local handle = ib.getLocal("handle", "java/lang/invoke/MethodHandle", 3);
 
-        ib.invokeStatic("java/lang/invoke/MethodHandles", "lookup", "()Ljava/lang/invoke/MethodHandles$Lookup;");
-        ib.aload(0);
-        ib.invokeVirtual(
-                "java/lang/invoke/MethodHandles$Lookup",
-                "unreflect",
-                "(Ljava/lang/reflect/Method;)Ljava/lang/invoke/MethodHandle;");
-        ib.invokeVirtual(
-                "java/lang/invoke/MethodHandle",
-                "asFixedArity",
-                "()Ljava/lang/invoke/MethodHandle;");
-        ib.ldc(org.objectweb.asm.Type.getType("[Ljava/lang/Object;"));
-        ib.iload(2);
-        ib.invokeVirtual(
+        ib.set(handle, AdvInsnBuilder.callVirtual(
+                AdvInsnBuilder.callVirtual(
+                        AdvInsnBuilder.callVirtual(
+                                AdvInsnBuilder.callStatic("java/lang/invoke/MethodHandles", "lookup", "java/lang/invoke/MethodHandles$Lookup"),
+                                "java/lang/invoke/MethodHandles$Lookup",
+                                "unreflect",
+                                "java/lang/invoke/MethodHandle",
+                                methodRef),
+                        "java/lang/invoke/MethodHandle",
+                        "asFixedArity",
+                        "java/lang/invoke/MethodHandle"),
                 "java/lang/invoke/MethodHandle",
                 "asSpreader",
-                "(Ljava/lang/Class;I)Ljava/lang/invoke/MethodHandle;");
-        ib.astore(handle);
-
-        ib.iload(1);
-        ib.ifeq(instanceMethod);
-        emitDropLeadingObjectArgument(ib, handle);
-
-        ib.label(instanceMethod);
-        ib.aload(handle);
-        emitInvokerHandleType(ib);
-        ib.invokeVirtual(
                 "java/lang/invoke/MethodHandle",
-                "asType",
-                "(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
-        ib.areturn();
+                objectArrayClass(),
+                parameterCount));
+        ib.ifCondition(AdvInsnBuilder.isTrue(isStatic), b -> dropLeadingObjectArgument(b, handle));
+        ib.returnValue(asInvokerHandle(handle, classArray(ib, "invokerParameters", objectArrayClass())));
         return method;
     }
 
@@ -1640,81 +1214,34 @@ public class VMGenerator extends ClassObj
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
-                "adaptDirectMethodHandle",
-                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;Z)Ljava/lang/invoke/MethodHandle;",
+                vmLayout.adaptDirectMethodHandle.name(),
+                vmLayout.adaptDirectMethodHandle.descriptor(),
                 new String[]{"java/lang/IllegalAccessException", "java/lang/NoSuchMethodException"});
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        int lookup = 4;
-        int handle = 5;
-        LabelNode virtualMethod = new LabelNode();
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local ownerClass = ib.getLocal("ownerClass", "java/lang/Class", 0);
+        Local name = ib.getLocal("name", "java/lang/String", 1);
+        Local methodType = ib.getLocal("methodType", "java/lang/invoke/MethodType", 2);
+        Local isStatic = ib.getLocal("isStatic", "Z", 3);
+        Local lookup = ib.getLocal("lookup", "java/lang/invoke/MethodHandles$Lookup", 4);
+        Local handle = ib.getLocal("handle", "java/lang/invoke/MethodHandle", 5);
 
-        ib.aload(0);
-        ib.invokeStatic("java/lang/invoke/MethodHandles", "lookup", "()Ljava/lang/invoke/MethodHandles$Lookup;");
-        ib.invokeStatic(
+        ib.set(lookup, AdvInsnBuilder.callStatic(
                 "java/lang/invoke/MethodHandles",
                 "privateLookupIn",
-                "(Ljava/lang/Class;Ljava/lang/invoke/MethodHandles$Lookup;)Ljava/lang/invoke/MethodHandles$Lookup;");
-        ib.astore(lookup);
-
-        ib.iload(3);
-        ib.ifeq(virtualMethod);
-        ib.aload(lookup);
-        ib.aload(0);
-        ib.aload(1);
-        ib.aload(2);
-        ib.invokeVirtual(
                 "java/lang/invoke/MethodHandles$Lookup",
-                "findStatic",
-                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
-        ib.invokeVirtual(
-                "java/lang/invoke/MethodHandle",
-                "asFixedArity",
-                "()Ljava/lang/invoke/MethodHandle;");
-        ib.ldc(org.objectweb.asm.Type.getType("[Ljava/lang/Object;"));
-        ib.aload(2);
-        ib.invokeVirtual("java/lang/invoke/MethodType", "parameterCount", "()I");
-        ib.invokeVirtual(
-                "java/lang/invoke/MethodHandle",
-                "asSpreader",
-                "(Ljava/lang/Class;I)Ljava/lang/invoke/MethodHandle;");
-        ib.astore(handle);
-        emitDropLeadingObjectArgument(ib, handle);
-        ib.aload(handle);
-        emitInvokerHandleType(ib);
-        ib.invokeVirtual(
-                "java/lang/invoke/MethodHandle",
-                "asType",
-                "(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
-        ib.areturn();
-
-        ib.label(virtualMethod);
-        ib.aload(lookup);
-        ib.aload(0);
-        ib.aload(1);
-        ib.aload(2);
-        ib.invokeVirtual(
-                "java/lang/invoke/MethodHandles$Lookup",
-                "findVirtual",
-                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
-        ib.invokeVirtual(
-                "java/lang/invoke/MethodHandle",
-                "asFixedArity",
-                "()Ljava/lang/invoke/MethodHandle;");
-        ib.ldc(org.objectweb.asm.Type.getType("[Ljava/lang/Object;"));
-        ib.aload(2);
-        ib.invokeVirtual("java/lang/invoke/MethodType", "parameterCount", "()I");
-        ib.invokeVirtual(
-                "java/lang/invoke/MethodHandle",
-                "asSpreader",
-                "(Ljava/lang/Class;I)Ljava/lang/invoke/MethodHandle;");
-        ib.astore(handle);
-        ib.aload(handle);
-        emitInvokerHandleType(ib);
-        ib.invokeVirtual(
-                "java/lang/invoke/MethodHandle",
-                "asType",
-                "(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
-        ib.areturn();
+                ownerClass,
+                AdvInsnBuilder.callStatic("java/lang/invoke/MethodHandles", "lookup", "java/lang/invoke/MethodHandles$Lookup")));
+        ib.ifElse(
+                AdvInsnBuilder.isTrue(isStatic),
+                b -> {
+                    b.set(handle, directHandle(lookup, ownerClass, name, methodType, true));
+                    dropLeadingObjectArgument(b, handle);
+                    b.returnValue(asInvokerHandle(handle, classArray(b, "staticInvokerParameters", objectArrayClass())));
+                },
+                b -> {
+                    b.set(handle, directHandle(lookup, ownerClass, name, methodType, false));
+                    b.returnValue(asInvokerHandle(handle, classArray(b, "virtualInvokerParameters", objectArrayClass())));
+                });
         return method;
     }
 
@@ -1722,38 +1249,32 @@ public class VMGenerator extends ClassObj
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
-                "adaptConstructorHandle",
-                "(Ljava/lang/reflect/Constructor;I)Ljava/lang/invoke/MethodHandle;",
+                vmLayout.adaptConstructorHandle.name(),
+                vmLayout.adaptConstructorHandle.descriptor(),
                 new String[]{"java/lang/IllegalAccessException"});
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        int handle = 2;
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local constructor = ib.getLocal("constructor", "java/lang/reflect/Constructor", 0);
+        Local parameterCount = ib.getLocal("parameterCount", "I", 1);
+        Local handle = ib.getLocal("handle", "java/lang/invoke/MethodHandle", 2);
 
-        ib.invokeStatic("java/lang/invoke/MethodHandles", "lookup", "()Ljava/lang/invoke/MethodHandles$Lookup;");
-        ib.aload(0);
-        ib.invokeVirtual(
-                "java/lang/invoke/MethodHandles$Lookup",
-                "unreflectConstructor",
-                "(Ljava/lang/reflect/Constructor;)Ljava/lang/invoke/MethodHandle;");
-        ib.invokeVirtual(
-                "java/lang/invoke/MethodHandle",
-                "asFixedArity",
-                "()Ljava/lang/invoke/MethodHandle;");
-        ib.ldc(org.objectweb.asm.Type.getType("[Ljava/lang/Object;"));
-        ib.iload(1);
-        ib.invokeVirtual(
+        ib.set(handle, AdvInsnBuilder.callVirtual(
+                AdvInsnBuilder.callVirtual(
+                        AdvInsnBuilder.callVirtual(
+                                AdvInsnBuilder.callStatic("java/lang/invoke/MethodHandles", "lookup", "java/lang/invoke/MethodHandles$Lookup"),
+                                "java/lang/invoke/MethodHandles$Lookup",
+                                "unreflectConstructor",
+                                "java/lang/invoke/MethodHandle",
+                                constructor),
+                        "java/lang/invoke/MethodHandle",
+                        "asFixedArity",
+                        "java/lang/invoke/MethodHandle"),
                 "java/lang/invoke/MethodHandle",
                 "asSpreader",
-                "(Ljava/lang/Class;I)Ljava/lang/invoke/MethodHandle;");
-        ib.astore(handle);
-
-        emitDropLeadingObjectArgument(ib, handle);
-        ib.aload(handle);
-        emitInvokerHandleType(ib);
-        ib.invokeVirtual(
                 "java/lang/invoke/MethodHandle",
-                "asType",
-                "(Ljava/lang/invoke/MethodType;)Ljava/lang/invoke/MethodHandle;");
-        ib.areturn();
+                objectArrayClass(),
+                parameterCount));
+        dropLeadingObjectArgument(ib, handle);
+        ib.returnValue(asInvokerHandle(handle, classArray(ib, "constructorInvokerParameters", objectArrayClass())));
         return method;
     }
 
@@ -1761,110 +1282,29 @@ public class VMGenerator extends ClassObj
     {
         MethodNode method = MethodUtils.newMethodNode(
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
-                "coerceArgument",
-                "(Ljava/lang/Object;Ljava/lang/Class;)Ljava/lang/Object;");
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        LabelNode booleanType = new LabelNode();
-        LabelNode charType = new LabelNode();
-        LabelNode byteType = new LabelNode();
-        LabelNode shortType = new LabelNode();
-        LabelNode intType = new LabelNode();
-        LabelNode longType = new LabelNode();
-        LabelNode floatType = new LabelNode();
-        LabelNode doubleType = new LabelNode();
-        LabelNode originalValue = new LabelNode();
-        LabelNode falseValue = new LabelNode();
-        LabelNode boxBoolean = new LabelNode();
+                vmLayout.coerceArgument.name(),
+                vmLayout.coerceArgument.descriptor());
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local value = ib.getLocal("value", "java/lang/Object", 0);
+        Local targetType = ib.getLocal("targetType", "java/lang/Class", 1);
 
-        ib.aload(1);
-        ib.getStatic("java/lang/Boolean", "TYPE", "Ljava/lang/Class;");
-        ib.ifAcmpEq(booleanType);
-        ib.aload(1);
-        ib.getStatic("java/lang/Character", "TYPE", "Ljava/lang/Class;");
-        ib.ifAcmpEq(charType);
-        ib.aload(1);
-        ib.getStatic("java/lang/Byte", "TYPE", "Ljava/lang/Class;");
-        ib.ifAcmpEq(byteType);
-        ib.aload(1);
-        ib.getStatic("java/lang/Short", "TYPE", "Ljava/lang/Class;");
-        ib.ifAcmpEq(shortType);
-        ib.aload(1);
-        ib.getStatic("java/lang/Integer", "TYPE", "Ljava/lang/Class;");
-        ib.ifAcmpEq(intType);
-        ib.aload(1);
-        ib.getStatic("java/lang/Long", "TYPE", "Ljava/lang/Class;");
-        ib.ifAcmpEq(longType);
-        ib.aload(1);
-        ib.getStatic("java/lang/Float", "TYPE", "Ljava/lang/Class;");
-        ib.ifAcmpEq(floatType);
-        ib.aload(1);
-        ib.getStatic("java/lang/Double", "TYPE", "Ljava/lang/Class;");
-        ib.ifAcmpEq(doubleType);
-        ib.goto_(originalValue);
-
-        ib.label(booleanType);
-        ib.aload(0);
-        TypeUtils.unboxIntLike(ib);
-        ib.ifeq(falseValue);
-        ib.iconst1();
-        ib.goto_(boxBoolean);
-        ib.label(falseValue);
-        ib.iconst0();
-        ib.label(boxBoolean);
-        ib.invokeStatic("java/lang/Boolean", "valueOf", "(Z)Ljava/lang/Boolean;");
-        ib.areturn();
-
-        ib.label(charType);
-        ib.aload(0);
-        TypeUtils.unboxIntLike(ib);
-        ib.i2c();
-        ib.invokeStatic("java/lang/Character", "valueOf", "(C)Ljava/lang/Character;");
-        ib.areturn();
-
-        ib.label(byteType);
-        ib.aload(0);
-        TypeUtils.unboxIntLike(ib);
-        ib.i2b();
-        ib.invokeStatic("java/lang/Byte", "valueOf", "(B)Ljava/lang/Byte;");
-        ib.areturn();
-
-        ib.label(shortType);
-        ib.aload(0);
-        TypeUtils.unboxIntLike(ib);
-        ib.i2s();
-        ib.invokeStatic("java/lang/Short", "valueOf", "(S)Ljava/lang/Short;");
-        ib.areturn();
-
-        ib.label(intType);
-        ib.aload(0);
-        TypeUtils.unboxIntLike(ib);
-        ib.invokeStatic("java/lang/Integer", "valueOf", "(I)Ljava/lang/Integer;");
-        ib.areturn();
-
-        ib.label(longType);
-        ib.aload(0);
-        ib.checkCast("java/lang/Number");
-        ib.invokeVirtual("java/lang/Number", "longValue", "()J");
-        ib.invokeStatic("java/lang/Long", "valueOf", "(J)Ljava/lang/Long;");
-        ib.areturn();
-
-        ib.label(floatType);
-        ib.aload(0);
-        ib.checkCast("java/lang/Number");
-        ib.invokeVirtual("java/lang/Number", "floatValue", "()F");
-        ib.invokeStatic("java/lang/Float", "valueOf", "(F)Ljava/lang/Float;");
-        ib.areturn();
-
-        ib.label(doubleType);
-        ib.aload(0);
-        ib.checkCast("java/lang/Number");
-        ib.invokeVirtual("java/lang/Number", "doubleValue", "()D");
-        ib.invokeStatic("java/lang/Double", "valueOf", "(D)Ljava/lang/Double;");
-        ib.areturn();
-
-        ib.label(originalValue);
-        ib.aload(0);
-        ib.areturn();
+        ib.ifCondition(AdvInsnBuilder.equal(targetType, primitiveType("java/lang/Boolean")), b -> b.returnValue(AdvInsnBuilder.callStatic(
+                "java/lang/Boolean", "valueOf", "java/lang/Boolean", AdvInsnBuilder.unbox(value, "Z"))));
+        ib.ifCondition(AdvInsnBuilder.equal(targetType, primitiveType("java/lang/Character")), b -> b.returnValue(AdvInsnBuilder.callStatic(
+                "java/lang/Character", "valueOf", "java/lang/Character", AdvInsnBuilder.cast(AdvInsnBuilder.unbox(value, "I"), "C"))));
+        ib.ifCondition(AdvInsnBuilder.equal(targetType, primitiveType("java/lang/Byte")), b -> b.returnValue(AdvInsnBuilder.callStatic(
+                "java/lang/Byte", "valueOf", "java/lang/Byte", AdvInsnBuilder.cast(AdvInsnBuilder.unbox(value, "I"), "B"))));
+        ib.ifCondition(AdvInsnBuilder.equal(targetType, primitiveType("java/lang/Short")), b -> b.returnValue(AdvInsnBuilder.callStatic(
+                "java/lang/Short", "valueOf", "java/lang/Short", AdvInsnBuilder.cast(AdvInsnBuilder.unbox(value, "I"), "S"))));
+        ib.ifCondition(AdvInsnBuilder.equal(targetType, primitiveType("java/lang/Integer")), b -> b.returnValue(AdvInsnBuilder.callStatic(
+                "java/lang/Integer", "valueOf", "java/lang/Integer", AdvInsnBuilder.unbox(value, "I"))));
+        ib.ifCondition(AdvInsnBuilder.equal(targetType, primitiveType("java/lang/Long")), b -> b.returnValue(AdvInsnBuilder.callStatic(
+                "java/lang/Long", "valueOf", "java/lang/Long", AdvInsnBuilder.callVirtual(AdvInsnBuilder.cast(value, "java/lang/Number"), "java/lang/Number", "longValue", "J"))));
+        ib.ifCondition(AdvInsnBuilder.equal(targetType, primitiveType("java/lang/Float")), b -> b.returnValue(AdvInsnBuilder.callStatic(
+                "java/lang/Float", "valueOf", "java/lang/Float", AdvInsnBuilder.callVirtual(AdvInsnBuilder.cast(value, "java/lang/Number"), "java/lang/Number", "floatValue", "F"))));
+        ib.ifCondition(AdvInsnBuilder.equal(targetType, primitiveType("java/lang/Double")), b -> b.returnValue(AdvInsnBuilder.callStatic(
+                "java/lang/Double", "valueOf", "java/lang/Double", AdvInsnBuilder.callVirtual(AdvInsnBuilder.cast(value, "java/lang/Number"), "java/lang/Number", "doubleValue", "D"))));
+        ib.returnValue(value);
         return method;
     }
 
@@ -1874,36 +1314,32 @@ public class VMGenerator extends ClassObj
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
                 "cloneArray",
                 "(Ljava/lang/Object;)Ljava/lang/Object;");
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        int length = 1;
-        int clone = 2;
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local array = ib.getLocal("array", "java/lang/Object", 0);
+        Local length = ib.getLocal("length", "I", 1);
+        Local clone = ib.getLocal("clone", "java/lang/Object", 2);
 
-        ib.aload(0);
-        ib.invokeStatic("java/lang/reflect/Array", "getLength", "(Ljava/lang/Object;)I");
-        ib.istore(length);
-
-        ib.aload(0);
-        ib.invokeVirtual("java/lang/Object", "getClass", "()Ljava/lang/Class;");
-        ib.invokeVirtual("java/lang/Class", "getComponentType", "()Ljava/lang/Class;");
-        ib.iload(length);
-        ib.invokeStatic(
+        ib.set(length, AdvInsnBuilder.callStatic("java/lang/reflect/Array", "getLength", "I", array));
+        ib.set(clone, AdvInsnBuilder.callStatic(
                 "java/lang/reflect/Array",
                 "newInstance",
-                "(Ljava/lang/Class;I)Ljava/lang/Object;");
-        ib.astore(clone);
-
-        ib.aload(0);
-        ib.iconst0();
-        ib.aload(clone);
-        ib.iconst0();
-        ib.iload(length);
-        ib.invokeStatic(
+                "java/lang/Object",
+                AdvInsnBuilder.callVirtual(
+                        AdvInsnBuilder.callVirtual(array, "java/lang/Object", "getClass", "java/lang/Class"),
+                        "java/lang/Class",
+                        "getComponentType",
+                        "java/lang/Class"),
+                length));
+        ib.directCall(AdvInsnBuilder.callStatic(
                 "java/lang/System",
                 "arraycopy",
-                "(Ljava/lang/Object;ILjava/lang/Object;II)V");
-
-        ib.aload(clone);
-        ib.areturn();
+                "V",
+                array,
+                AdvInsnBuilder.constant(0),
+                clone,
+                AdvInsnBuilder.constant(0),
+                length));
+        ib.returnValue(clone);
         return method;
     }
 
@@ -1913,12 +1349,18 @@ public class VMGenerator extends ClassObj
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
                 "loadOwner",
                 "(Ljava/lang/String;)Ljava/lang/Class;");
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        ib.aload(0);
-        ib.ldc(org.objectweb.asm.Type.getObjectType(className()));
-        ib.invokeVirtual("java/lang/Class", "getClassLoader", "()Ljava/lang/ClassLoader;");
-        vmLayout.loadOwnerWithLoader.invokeStatic(ib);
-        ib.areturn();
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local owner = ib.getLocal("owner", "java/lang/String", 0);
+        ib.returnValue(AdvInsnBuilder.callStatic(
+                vmLayout.owner,
+                vmLayout.loadOwnerWithLoader.name(),
+                "java/lang/Class",
+                owner,
+                AdvInsnBuilder.callVirtual(
+                        AdvInsnBuilder.constant(org.objectweb.asm.Type.getObjectType(className())),
+                        "java/lang/Class",
+                        "getClassLoader",
+                        "java/lang/ClassLoader")));
         return method;
     }
 
@@ -1928,142 +1370,50 @@ public class VMGenerator extends ClassObj
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
                 "loadOwner",
                 "(Ljava/lang/String;Ljava/lang/ClassLoader;)Ljava/lang/Class;");
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        LabelNode primitiveBoolean = new LabelNode();
-        LabelNode primitiveChar = new LabelNode();
-        LabelNode primitiveByte = new LabelNode();
-        LabelNode primitiveShort = new LabelNode();
-        LabelNode primitiveInt = new LabelNode();
-        LabelNode primitiveFloat = new LabelNode();
-        LabelNode primitiveLong = new LabelNode();
-        LabelNode primitiveDouble = new LabelNode();
-        LabelNode primitiveVoid = new LabelNode();
-        LabelNode notPrimitive = new LabelNode();
-        LabelNode notObjectDescriptor = new LabelNode();
-        LabelNode start = new LabelNode();
-        LabelNode end = new LabelNode();
-        LabelNode handler = new LabelNode();
-        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
-                start, end, handler, "java/lang/ClassNotFoundException"));
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local owner = ib.getLocal("owner", "java/lang/String", 0);
+        Local loader = ib.getLocal("loader", "java/lang/ClassLoader", 1);
 
-        ib.aload(0);
-        ib.invokeVirtual("java/lang/String", "length", "()I");
-        ib.iconst1();
-        ib.ifIcmpNe(notPrimitive);
-        ib.aload(0);
-        ib.iconst0();
-        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
-        ib.bipush('Z');
-        ib.ifIcmpEq(primitiveBoolean);
-        ib.aload(0);
-        ib.iconst0();
-        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
-        ib.bipush('C');
-        ib.ifIcmpEq(primitiveChar);
-        ib.aload(0);
-        ib.iconst0();
-        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
-        ib.bipush('B');
-        ib.ifIcmpEq(primitiveByte);
-        ib.aload(0);
-        ib.iconst0();
-        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
-        ib.bipush('S');
-        ib.ifIcmpEq(primitiveShort);
-        ib.aload(0);
-        ib.iconst0();
-        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
-        ib.bipush('I');
-        ib.ifIcmpEq(primitiveInt);
-        ib.aload(0);
-        ib.iconst0();
-        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
-        ib.bipush('F');
-        ib.ifIcmpEq(primitiveFloat);
-        ib.aload(0);
-        ib.iconst0();
-        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
-        ib.bipush('J');
-        ib.ifIcmpEq(primitiveLong);
-        ib.aload(0);
-        ib.iconst0();
-        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
-        ib.bipush('D');
-        ib.ifIcmpEq(primitiveDouble);
-        ib.aload(0);
-        ib.iconst0();
-        ib.invokeVirtual("java/lang/String", "charAt", "(I)C");
-        ib.bipush('V');
-        ib.ifIcmpEq(primitiveVoid);
+        ib.ifCondition(
+                AdvInsnBuilder.equal(AdvInsnBuilder.callVirtual(owner, "java/lang/String", "length", "I"), AdvInsnBuilder.constant(1)),
+                b -> b.switchLookup(
+                        AdvInsnBuilder.callVirtual(owner, "java/lang/String", "charAt", "C", AdvInsnBuilder.constant(0)),
+                        null,
+                        AdvInsnBuilder.switchCase('Z', bb -> bb.returnValue(primitiveType("java/lang/Boolean"))),
+                        AdvInsnBuilder.switchCase('C', bb -> bb.returnValue(primitiveType("java/lang/Character"))),
+                        AdvInsnBuilder.switchCase('B', bb -> bb.returnValue(primitiveType("java/lang/Byte"))),
+                        AdvInsnBuilder.switchCase('S', bb -> bb.returnValue(primitiveType("java/lang/Short"))),
+                        AdvInsnBuilder.switchCase('I', bb -> bb.returnValue(primitiveType("java/lang/Integer"))),
+                        AdvInsnBuilder.switchCase('F', bb -> bb.returnValue(primitiveType("java/lang/Float"))),
+                        AdvInsnBuilder.switchCase('J', bb -> bb.returnValue(primitiveType("java/lang/Long"))),
+                        AdvInsnBuilder.switchCase('D', bb -> bb.returnValue(primitiveType("java/lang/Double"))),
+                        AdvInsnBuilder.switchCase('V', bb -> bb.returnValue(primitiveType("java/lang/Void")))));
 
-        ib.label(notPrimitive);
-        ib.aload(0);
-        ib.ldc("L");
-        ib.invokeVirtual("java/lang/String", "startsWith", "(Ljava/lang/String;)Z");
-        ib.ifeq(notObjectDescriptor);
-        ib.aload(0);
-        ib.ldc(";");
-        ib.invokeVirtual("java/lang/String", "endsWith", "(Ljava/lang/String;)Z");
-        ib.ifeq(notObjectDescriptor);
-        ib.aload(0);
-        ib.iconst1();
-        ib.aload(0);
-        ib.invokeVirtual("java/lang/String", "length", "()I");
-        ib.iconst1();
-        ib.isub();
-        ib.invokeVirtual("java/lang/String", "substring", "(II)Ljava/lang/String;");
-        ib.astore(0);
+        ib.ifCondition(
+                AdvInsnBuilder.and(
+                        AdvInsnBuilder.isTrue(AdvInsnBuilder.callVirtual(owner, "java/lang/String", "startsWith", "Z", AdvInsnBuilder.constant("L"))),
+                        AdvInsnBuilder.isTrue(AdvInsnBuilder.callVirtual(owner, "java/lang/String", "endsWith", "Z", AdvInsnBuilder.constant(";")))),
+                b -> b.set(owner, AdvInsnBuilder.callVirtual(
+                        owner,
+                        "java/lang/String",
+                        "substring",
+                        "java/lang/String",
+                        AdvInsnBuilder.constant(1),
+                        AdvInsnBuilder.minus(
+                                AdvInsnBuilder.callVirtual(owner, "java/lang/String", "length", "I"),
+                                AdvInsnBuilder.constant(1)))));
 
-        ib.label(notObjectDescriptor);
-        ib.label(start);
-        ib.aload(0);
-        ib.bipush('/');
-        ib.bipush('.');
-        ib.invokeVirtual("java/lang/String", "replace", "(CC)Ljava/lang/String;");
-        ib.iconst0();
-        ib.aload(1);
-        ib.invokeStatic(
-                "java/lang/Class",
-                "forName",
-                "(Ljava/lang/String;ZLjava/lang/ClassLoader;)Ljava/lang/Class;");
-        ib.label(end);
-        ib.areturn();
-
-        ib.label(handler);
-        ib.astore(1);
-        ib.new_("java/lang/IllegalStateException");
-        ib.dup();
-        ib.aload(1);
-        ib.invokeSpecial("java/lang/IllegalStateException", "<init>", "(Ljava/lang/Throwable;)V");
-        ib.athrow();
-
-        ib.label(primitiveBoolean);
-        ib.getStatic("java/lang/Boolean", "TYPE", "Ljava/lang/Class;");
-        ib.areturn();
-        ib.label(primitiveChar);
-        ib.getStatic("java/lang/Character", "TYPE", "Ljava/lang/Class;");
-        ib.areturn();
-        ib.label(primitiveByte);
-        ib.getStatic("java/lang/Byte", "TYPE", "Ljava/lang/Class;");
-        ib.areturn();
-        ib.label(primitiveShort);
-        ib.getStatic("java/lang/Short", "TYPE", "Ljava/lang/Class;");
-        ib.areturn();
-        ib.label(primitiveInt);
-        ib.getStatic("java/lang/Integer", "TYPE", "Ljava/lang/Class;");
-        ib.areturn();
-        ib.label(primitiveFloat);
-        ib.getStatic("java/lang/Float", "TYPE", "Ljava/lang/Class;");
-        ib.areturn();
-        ib.label(primitiveLong);
-        ib.getStatic("java/lang/Long", "TYPE", "Ljava/lang/Class;");
-        ib.areturn();
-        ib.label(primitiveDouble);
-        ib.getStatic("java/lang/Double", "TYPE", "Ljava/lang/Class;");
-        ib.areturn();
-        ib.label(primitiveVoid);
-        ib.getStatic("java/lang/Void", "TYPE", "Ljava/lang/Class;");
-        ib.areturn();
+        ib.tryCatch(
+                b -> b.returnValue(AdvInsnBuilder.callStatic(
+                        "java/lang/Class",
+                        "forName",
+                        "java/lang/Class",
+                        AdvInsnBuilder.callVirtual(owner, "java/lang/String", "replace", "java/lang/String", AdvInsnBuilder.constant('/'), AdvInsnBuilder.constant('.')),
+                        AdvInsnBuilder.constant(false),
+                        loader)),
+                "java/lang/ClassNotFoundException",
+                "exception",
+                b -> b.throwValue(AdvInsnBuilder.newObject("java/lang/IllegalStateException", b.getLocal("exception"))));
         return method;
     }
 
@@ -2073,9 +1423,8 @@ public class VMGenerator extends ClassObj
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
                 "rethrow",
                 "(Ljava/lang/Throwable;)Ljava/lang/RuntimeException;");
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        ib.aload(0);
-        ib.athrow();
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        ib.throwValue(ib.getLocal("throwable", "java/lang/Throwable", 0));
         return method;
     }
 
@@ -2085,43 +1434,19 @@ public class VMGenerator extends ClassObj
                 new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.SYNCHRONIZED},
                 "monitorFor",
                 "(Ljava/lang/Object;)Ljava/util/concurrent/locks/ReentrantLock;");
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        LabelNode notNull = new LabelNode();
-        LabelNode existing = new LabelNode();
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local monitor = ib.getLocal("monitor", "java/lang/Object", 0);
+        Local lock = ib.getLocal("lock", "java/util/concurrent/locks/ReentrantLock", 1);
 
-        ib.aload(0);
-        ib.ifNonNull(notNull);
-        ib.new_("java/lang/NullPointerException");
-        ib.dup();
-        ib.invokeSpecial("java/lang/NullPointerException", "<init>", "()V");
-        ib.athrow();
-
-        ib.label(notNull);
-        vmLayout.monitors.getStatic(ib);
-        ib.aload(0);
-        ib.invokeInterface("java/util/Map", "get", "(Ljava/lang/Object;)Ljava/lang/Object;");
-        ib.checkCast("java/util/concurrent/locks/ReentrantLock");
-        ib.astore(1);
-
-        ib.aload(1);
-        ib.ifNonNull(existing);
-        ib.new_("java/util/concurrent/locks/ReentrantLock");
-        ib.dup();
-        ib.invokeSpecial("java/util/concurrent/locks/ReentrantLock", "<init>", "()V");
-        ib.astore(1);
-
-        vmLayout.monitors.getStatic(ib);
-        ib.aload(0);
-        ib.aload(1);
-        ib.invokeInterface(
-                "java/util/Map",
-                "put",
-                "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-        ib.pop();
-
-        ib.label(existing);
-        ib.aload(1);
-        ib.areturn();
+        ib.ifCondition(AdvInsnBuilder.isNull(monitor), b -> b.throwValue(AdvInsnBuilder.newObject("java/lang/NullPointerException")));
+        ib.set(lock, AdvInsnBuilder.cast(mapGet(AdvInsnBuilder.staticField(vmLayout.monitors), monitor), "java/util/concurrent/locks/ReentrantLock"));
+        ib.ifCondition(
+                AdvInsnBuilder.isNull(lock),
+                b -> {
+                    b.set(lock, AdvInsnBuilder.newObject("java/util/concurrent/locks/ReentrantLock"));
+                    b.directCall(mapPut(AdvInsnBuilder.staticField(vmLayout.monitors), monitor, lock));
+                });
+        ib.returnValue(lock);
         return method;
     }
 
@@ -2131,11 +1456,14 @@ public class VMGenerator extends ClassObj
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
                 vmLayout.monitorEnter.name(),
                 vmLayout.monitorEnter.descriptor());
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        ib.aload(0);
-        vmLayout.monitorFor.invokeStatic(ib);
-        ib.invokeVirtual("java/util/concurrent/locks/ReentrantLock", "lock", "()V");
-        ib._return();
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local monitor = ib.getLocal("monitor", "java/lang/Object", 0);
+        ib.directCall(AdvInsnBuilder.callVirtual(
+                AdvInsnBuilder.callStatic(vmLayout.owner, vmLayout.monitorFor.name(), "java/util/concurrent/locks/ReentrantLock", monitor),
+                "java/util/concurrent/locks/ReentrantLock",
+                "lock",
+                "V"));
+        ib.returnVoid();
         return method;
     }
 
@@ -2145,257 +1473,49 @@ public class VMGenerator extends ClassObj
                 new Acc[]{Acc.PRIVATE, Acc.STATIC},
                 vmLayout.monitorExit.name(),
                 vmLayout.monitorExit.descriptor());
-        InsnBuilder ib = new InsnBuilder(method.instructions);
-        ib.aload(0);
-        vmLayout.monitorFor.invokeStatic(ib);
-        ib.invokeVirtual("java/util/concurrent/locks/ReentrantLock", "unlock", "()V");
-        ib._return();
+        AdvInsnBuilder ib = new AdvInsnBuilder(method);
+        Local monitor = ib.getLocal("monitor", "java/lang/Object", 0);
+        ib.directCall(AdvInsnBuilder.callVirtual(
+                AdvInsnBuilder.callStatic(vmLayout.owner, vmLayout.monitorFor.name(), "java/util/concurrent/locks/ReentrantLock", monitor),
+                "java/util/concurrent/locks/ReentrantLock",
+                "unlock",
+                "V"));
+        ib.returnVoid();
         return method;
-    }
-
-    private void emitCoerceArguments(
-            InsnBuilder ib,
-            int argumentsLocal,
-            int methodTypeLocal,
-            int indexLocal)
-    {
-        LabelNode loop = new LabelNode();
-        LabelNode done = new LabelNode();
-
-        ib.iconst0();
-        ib.istore(indexLocal);
-        ib.label(loop);
-        ib.iload(indexLocal);
-        ib.aload(argumentsLocal);
-        ib.arrayLength();
-        ib.ifIcmpGe(done);
-
-        ib.aload(argumentsLocal);
-        ib.iload(indexLocal);
-        ib.aload(argumentsLocal);
-        ib.iload(indexLocal);
-        ib.aaload();
-        ib.aload(methodTypeLocal);
-        ib.iload(indexLocal);
-        ib.invokeVirtual("java/lang/invoke/MethodType", "parameterType", "(I)Ljava/lang/Class;");
-        ib.invokeStatic(
-                className(),
-                "coerceArgument",
-                "(Ljava/lang/Object;Ljava/lang/Class;)Ljava/lang/Object;");
-        ib.aastore();
-
-        ib.iinc(indexLocal, 1);
-        ib.goto_(loop);
-        ib.label(done);
-    }
-
-    private static void emitExceptionWithInt(
-            InsnBuilder ib,
-            String exceptionType,
-            String prefix,
-            int intLocal)
-    {
-        ib.new_(exceptionType);
-        ib.dup();
-        ib.new_("java/lang/StringBuilder");
-        ib.dup();
-        ib.ldc(prefix);
-        ib.invokeSpecial("java/lang/StringBuilder", "<init>", "(Ljava/lang/String;)V");
-        ib.iload(intLocal);
-        ib.invokeVirtual("java/lang/StringBuilder", "append", "(I)Ljava/lang/StringBuilder;");
-        ib.invokeVirtual("java/lang/StringBuilder", "toString", "()Ljava/lang/String;");
-        ib.invokeSpecial(exceptionType, "<init>", "(Ljava/lang/String;)V");
-        ib.athrow();
-    }
-
-    private static void emitFieldHandleKey(InsnBuilder ib)
-    {
-        ib.new_("java/lang/StringBuilder");
-        ib.dup();
-        ib.aload(0);
-        ib.invokeSpecial("java/lang/StringBuilder", "<init>", "(Ljava/lang/String;)V");
-        appendString(ib, ".");
-        ib.aload(1);
-        ib.invokeVirtual("java/lang/StringBuilder", "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
-        appendString(ib, ":");
-        ib.aload(2);
-        ib.invokeVirtual("java/lang/StringBuilder", "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
-        appendString(ib, ":");
-        ib.iload(3);
-        ib.invokeVirtual("java/lang/StringBuilder", "append", "(Z)Ljava/lang/StringBuilder;");
-        appendString(ib, ":");
-        ib.iload(4);
-        ib.invokeVirtual("java/lang/StringBuilder", "append", "(Z)Ljava/lang/StringBuilder;");
-        ib.invokeVirtual("java/lang/StringBuilder", "toString", "()Ljava/lang/String;");
-    }
-
-    private static void emitMethodHandleKey(InsnBuilder ib)
-    {
-        ib.new_("java/lang/StringBuilder");
-        ib.dup();
-        ib.aload(0);
-        ib.invokeSpecial("java/lang/StringBuilder", "<init>", "(Ljava/lang/String;)V");
-        appendString(ib, ".");
-        ib.aload(1);
-        ib.invokeVirtual("java/lang/StringBuilder", "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
-        ib.aload(2);
-        ib.invokeVirtual("java/lang/StringBuilder", "append", "(Ljava/lang/Object;)Ljava/lang/StringBuilder;");
-        appendString(ib, ":");
-        ib.iload(3);
-        ib.invokeVirtual("java/lang/StringBuilder", "append", "(Z)Ljava/lang/StringBuilder;");
-        ib.invokeVirtual("java/lang/StringBuilder", "toString", "()Ljava/lang/String;");
-    }
-
-    private static void appendString(InsnBuilder ib, String value)
-    {
-        ib.ldc(value);
-        ib.invokeVirtual("java/lang/StringBuilder", "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
-    }
-
-    private static void emitDropLeadingObjectArgument(InsnBuilder ib, int handleLocal)
-    {
-        ib.aload(handleLocal);
-        ib.iconst0();
-        ib.iconst1();
-        ib.aneArray("java/lang/Class");
-        ib.dup();
-        ib.iconst0();
-        emitObjectClass(ib);
-        ib.aastore();
-        ib.invokeStatic(
-                "java/lang/invoke/MethodHandles",
-                "dropArguments",
-                "(Ljava/lang/invoke/MethodHandle;I[Ljava/lang/Class;)Ljava/lang/invoke/MethodHandle;");
-        ib.astore(handleLocal);
-    }
-
-    private static void emitInvokerHandleType(InsnBuilder ib)
-    {
-        emitObjectClass(ib);
-        emitObjectClass(ib);
-        ib.iconst1();
-        ib.aneArray("java/lang/Class");
-        ib.dup();
-        ib.iconst0();
-        ib.ldc(org.objectweb.asm.Type.getType("[Ljava/lang/Object;"));
-        ib.aastore();
-        ib.invokeStatic(
-                "java/lang/invoke/MethodType",
-                "methodType",
-                "(Ljava/lang/Class;Ljava/lang/Class;[Ljava/lang/Class;)Ljava/lang/invoke/MethodType;");
-    }
-
-    private static void emitGetterHandleType(InsnBuilder ib)
-    {
-        emitObjectClass(ib);
-        emitObjectClass(ib);
-        ib.invokeStatic(
-                "java/lang/invoke/MethodType",
-                "methodType",
-                "(Ljava/lang/Class;Ljava/lang/Class;)Ljava/lang/invoke/MethodType;");
-    }
-
-    private static void emitSetterHandleType(InsnBuilder ib)
-    {
-        ib.getStatic("java/lang/Void", "TYPE", "Ljava/lang/Class;");
-        emitObjectClass(ib);
-        ib.iconst1();
-        ib.aneArray("java/lang/Class");
-        ib.dup();
-        ib.iconst0();
-        emitObjectClass(ib);
-        ib.aastore();
-        ib.invokeStatic(
-                "java/lang/invoke/MethodType",
-                "methodType",
-                "(Ljava/lang/Class;Ljava/lang/Class;[Ljava/lang/Class;)Ljava/lang/invoke/MethodType;");
-    }
-
-    private static void emitObjectClass(InsnBuilder ib)
-    {
-        ib.ldc(org.objectweb.asm.Type.getType("Ljava/lang/Object;"));
-    }
-
-    private static void emitNoSuchField(InsnBuilder ib, int ownerClassLocal)
-    {
-        ib.new_("java/lang/NoSuchFieldException");
-        ib.dup();
-        ib.new_("java/lang/StringBuilder");
-        ib.dup();
-        ib.aload(ownerClassLocal);
-        ib.invokeVirtual("java/lang/Class", "getName", "()Ljava/lang/String;");
-        ib.invokeSpecial("java/lang/StringBuilder", "<init>", "(Ljava/lang/String;)V");
-        appendString(ib, ".");
-        ib.aload(1);
-        ib.invokeVirtual("java/lang/StringBuilder", "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
-        ib.invokeVirtual("java/lang/StringBuilder", "toString", "()Ljava/lang/String;");
-        ib.invokeSpecial("java/lang/NoSuchFieldException", "<init>", "(Ljava/lang/String;)V");
-        ib.athrow();
-    }
-
-    private static void emitNoSuchMethod(InsnBuilder ib, int ownerClassLocal)
-    {
-        ib.new_("java/lang/NoSuchMethodException");
-        ib.dup();
-        ib.new_("java/lang/StringBuilder");
-        ib.dup();
-        ib.aload(ownerClassLocal);
-        ib.invokeVirtual("java/lang/Class", "getName", "()Ljava/lang/String;");
-        ib.invokeSpecial("java/lang/StringBuilder", "<init>", "(Ljava/lang/String;)V");
-        appendString(ib, ".");
-        ib.aload(1);
-        ib.invokeVirtual("java/lang/StringBuilder", "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;");
-        ib.aload(2);
-        ib.invokeVirtual("java/lang/StringBuilder", "append", "(Ljava/lang/Object;)Ljava/lang/StringBuilder;");
-        ib.invokeVirtual("java/lang/StringBuilder", "toString", "()Ljava/lang/String;");
-        ib.invokeSpecial("java/lang/NoSuchMethodException", "<init>", "(Ljava/lang/String;)V");
-        ib.athrow();
     }
 
     private MethodNode genClInitMethod(List<CodePoolGenerator> codePoolGenerators)
     {
         MethodNode initMethod = MethodUtils.newMethodNode(new Acc[]{Acc.STATIC}, "<clinit>", "()V");
-        InsnBuilder ib = new InsnBuilder();
+        AdvInsnBuilder ib = new AdvInsnBuilder(initMethod);
 
-        ib.pushInt(codePoolGenerators.size());
-        ib.aneArray(vmCodePoolGenerator.className());
+        Local codePools = ib.var("codePools", "[Ljava/lang/Object;");
+        ib.set(codePools, AdvInsnBuilder.newArray("java/lang/Object", AdvInsnBuilder.constant(codePoolGenerators.size())));
         for (int i = 0; i < codePoolGenerators.size(); i++)
         {
-            ib.dup();
-            ib.pushInt(i);
-            ib.getStatic(codePoolGenerators.get(i).className(), "INSTANCE", vmCodePoolGenerator.descriptor());
-            ib.aastore();
+            ib.setArray(
+                    codePools,
+                    AdvInsnBuilder.constant(i),
+                    AdvInsnBuilder.staticField(codePoolGenerators.get(i).layout.instance));
         }
-        ib.invokeStatic("java/util/Arrays", "asList", "([Ljava/lang/Object;)Ljava/util/List;");
-        vmLayout.codePools.putStatic(ib);
+        ib.set(AdvInsnBuilder.staticField(vmLayout.codePools), AdvInsnBuilder.callStatic(
+                "java/util/Arrays",
+                "asList",
+                "java/util/List",
+                codePools));
 
-        ib.new_("java/util/concurrent/ConcurrentHashMap");
-        ib.dup();
-        ib.invokeSpecial("java/util/concurrent/ConcurrentHashMap", "<init>", "()V");
-        vmLayout.fieldHandles.putStatic(ib);
+        ib.set(AdvInsnBuilder.staticField(vmLayout.fieldHandles), AdvInsnBuilder.newObject("java/util/concurrent/ConcurrentHashMap"));
 
-        ib.new_("java/util/concurrent/ConcurrentHashMap");
-        ib.dup();
-        ib.invokeSpecial("java/util/concurrent/ConcurrentHashMap", "<init>", "()V");
-        vmLayout.methodHandles.putStatic(ib);
+        ib.set(AdvInsnBuilder.staticField(vmLayout.methodHandles), AdvInsnBuilder.newObject("java/util/concurrent/ConcurrentHashMap"));
 
-        ib.new_("java/util/concurrent/ConcurrentHashMap");
-        ib.dup();
-        ib.invokeSpecial("java/util/concurrent/ConcurrentHashMap", "<init>", "()V");
-        vmLayout.methodTypes.putStatic(ib);
+        ib.set(AdvInsnBuilder.staticField(vmLayout.methodTypes), AdvInsnBuilder.newObject("java/util/concurrent/ConcurrentHashMap"));
 
-        ib.new_("java/util/WeakHashMap");
-        ib.dup();
-        ib.invokeSpecial("java/util/WeakHashMap", "<init>", "()V");
-        ib.invokeStatic(
+        ib.set(AdvInsnBuilder.staticField(vmLayout.monitors), AdvInsnBuilder.callStatic(
                 "java/util/Collections",
                 "synchronizedMap",
-                "(Ljava/util/Map;)Ljava/util/Map;");
-        vmLayout.monitors.putStatic(ib);
-
-        ib._return();
-
-        initMethod.instructions.add(ib.toInsnList());
+                "java/util/Map",
+                AdvInsnBuilder.cast(AdvInsnBuilder.newObject("java/util/WeakHashMap"), "java/util/Map")));
+        ib.returnVoid();
         return initMethod;
     }
 
@@ -2412,10 +1532,283 @@ public class VMGenerator extends ClassObj
         }
     }
 
+    private static Expr mapGet(Expr map, Expr key)
+    {
+        return AdvInsnBuilder.callInterface(
+                map,
+                "java/util/Map",
+                "get",
+                "java/lang/Object",
+                AdvInsnBuilder.cast(key, "java/lang/Object"));
+    }
+
+    private static Expr mapPut(Expr map, Expr key, Expr value)
+    {
+        return AdvInsnBuilder.callInterface(
+                map,
+                "java/util/Map",
+                "put",
+                "java/lang/Object",
+                AdvInsnBuilder.cast(key, "java/lang/Object"),
+                AdvInsnBuilder.cast(value, "java/lang/Object"));
+    }
+
+    private Expr fieldHandle(Expr owner, Expr name, Expr descriptor, Expr isStatic, Expr setter)
+    {
+        return AdvInsnBuilder.callStatic(
+                vmLayout.owner,
+                vmLayout.fieldHandle.name(),
+                "java/lang/invoke/MethodHandle",
+                owner,
+                name,
+                descriptor,
+                isStatic,
+                setter);
+    }
+
+    private static Expr fieldHandleKey(Expr owner, Expr name, Expr descriptor, Expr isStatic, Expr setter)
+    {
+        return stringConcat(
+                owner,
+                AdvInsnBuilder.constant("."),
+                name,
+                AdvInsnBuilder.constant(":"),
+                descriptor,
+                AdvInsnBuilder.constant(":"),
+                isStatic,
+                AdvInsnBuilder.constant(":"),
+                setter);
+    }
+
+    private static Expr methodHandleKey(Expr owner, Expr name, Expr methodType, Expr isStatic)
+    {
+        return stringConcat(
+                owner,
+                AdvInsnBuilder.constant("."),
+                name,
+                methodType,
+                AdvInsnBuilder.constant(":"),
+                isStatic);
+    }
+
+    private Expr rethrow(Expr throwable)
+    {
+        return AdvInsnBuilder.callStatic(
+                vmLayout.owner,
+                vmLayout.rethrow.name(),
+                "java/lang/RuntimeException",
+                throwable);
+    }
+
+    private static void throwNoSuchField(AdvInsnBuilder ib, Expr ownerClass, Expr fieldName)
+    {
+        ib.throwValue(AdvInsnBuilder.newObject(
+                "java/lang/NoSuchFieldException",
+                stringConcat(
+                        AdvInsnBuilder.callVirtual(ownerClass, "java/lang/Class", "getName", "java/lang/String"),
+                        AdvInsnBuilder.constant("."),
+                        fieldName)));
+    }
+
+    private static void throwNoSuchMethod(AdvInsnBuilder ib, Expr ownerClass, Expr methodName, Expr methodType)
+    {
+        ib.throwValue(AdvInsnBuilder.newObject(
+                "java/lang/NoSuchMethodException",
+                stringConcat(
+                        AdvInsnBuilder.callVirtual(ownerClass, "java/lang/Class", "getName", "java/lang/String"),
+                        AdvInsnBuilder.constant("."),
+                        methodName,
+                        methodType)));
+    }
+
+    private static void throwExceptionWithInt(AdvInsnBuilder ib, String exceptionType, String prefix, Expr value)
+    {
+        ib.throwValue(AdvInsnBuilder.newObject(
+                exceptionType,
+                stringConcat(AdvInsnBuilder.constant(prefix), value)));
+    }
+
+    private void cacheAdaptedMethodHandle(
+            AdvInsnBuilder ib,
+            Local reflectedMethod,
+            Local ownerClass,
+            Local name,
+            Local methodType,
+            Local isStatic,
+            Local key,
+            Local target)
+    {
+        ib.directCall(AdvInsnBuilder.callVirtual(reflectedMethod, "java/lang/reflect/Method", "setAccessible", "V", AdvInsnBuilder.constant(true)));
+        ib.ifCondition(
+                AdvInsnBuilder.notEqual(
+                        AdvInsnBuilder.callVirtual(reflectedMethod, "java/lang/reflect/Method", "getReturnType", "java/lang/Class"),
+                        AdvInsnBuilder.callVirtual(methodType, "java/lang/invoke/MethodType", "returnType", "java/lang/Class")),
+                b -> throwNoSuchMethod(b, ownerClass, name, methodType));
+        ib.ifCondition(
+                AdvInsnBuilder.notEqual(
+                        AdvInsnBuilder.callStatic(
+                                "java/lang/reflect/Modifier",
+                                "isStatic",
+                                "Z",
+                                AdvInsnBuilder.callVirtual(reflectedMethod, "java/lang/reflect/Method", "getModifiers", "I")),
+                        isStatic),
+                b -> throwNoSuchMethod(b, ownerClass, name, methodType));
+        ib.set(target, AdvInsnBuilder.callStatic(
+                vmLayout.owner,
+                vmLayout.adaptMethodHandle.name(),
+                "java/lang/invoke/MethodHandle",
+                reflectedMethod,
+                isStatic,
+                AdvInsnBuilder.callVirtual(methodType, "java/lang/invoke/MethodType", "parameterCount", "I")));
+        ib.directCall(mapPut(AdvInsnBuilder.staticField(vmLayout.methodHandles), key, target));
+    }
+
+    private static Expr directHandle(Expr lookup, Expr ownerClass, Expr name, Expr methodType, boolean staticMethod)
+    {
+        return AdvInsnBuilder.callVirtual(
+                AdvInsnBuilder.callVirtual(
+                        AdvInsnBuilder.callVirtual(
+                                lookup,
+                                "java/lang/invoke/MethodHandles$Lookup",
+                                staticMethod ? "findStatic" : "findVirtual",
+                                "java/lang/invoke/MethodHandle",
+                                ownerClass,
+                                name,
+                                methodType),
+                        "java/lang/invoke/MethodHandle",
+                        "asFixedArity",
+                        "java/lang/invoke/MethodHandle"),
+                "java/lang/invoke/MethodHandle",
+                "asSpreader",
+                "java/lang/invoke/MethodHandle",
+                objectArrayClass(),
+                AdvInsnBuilder.callVirtual(methodType, "java/lang/invoke/MethodType", "parameterCount", "I"));
+    }
+
+    private static Expr asInvokerHandle(Expr handle, Expr parameterTypes)
+    {
+        return AdvInsnBuilder.callVirtual(
+                handle,
+                "java/lang/invoke/MethodHandle",
+                "asType",
+                "java/lang/invoke/MethodHandle",
+                methodType(objectClass(), objectClass(), parameterTypes));
+    }
+
+    private void coerceArguments(AdvInsnBuilder ib, Local arguments, Local methodType)
+    {
+        Local index = ib.var("argumentIndex", "I");
+        ib.forLoop(
+                b -> b.set(index, AdvInsnBuilder.constant(0)),
+                AdvInsnBuilder.lessThan(index, AdvInsnBuilder.arrayLength(arguments)),
+                b -> b.increment(index, 1),
+                b -> b.setArray(
+                        arguments,
+                        index,
+                        AdvInsnBuilder.callStatic(
+                                vmLayout.owner,
+                                vmLayout.coerceArgument.name(),
+                                "java/lang/Object",
+                                AdvInsnBuilder.arrayAt(arguments, index),
+                                AdvInsnBuilder.callVirtual(methodType, "java/lang/invoke/MethodType", "parameterType", "java/lang/Class", index))));
+    }
+
+    private static Expr stringConcat(Expr first, Expr... rest)
+    {
+        Expr builder = AdvInsnBuilder.newObject("java/lang/StringBuilder", first);
+        for (Expr value : rest)
+        {
+            if ((value.type().getSort() == org.objectweb.asm.Type.OBJECT || value.type().getSort() == org.objectweb.asm.Type.ARRAY)
+                && !value.type().equals(org.objectweb.asm.Type.getType(String.class)))
+            {
+                value = AdvInsnBuilder.cast(value, "java/lang/Object");
+            }
+            builder = AdvInsnBuilder.callVirtual(
+                    builder,
+                    "java/lang/StringBuilder",
+                    "append",
+                    "java/lang/StringBuilder",
+                    value);
+        }
+        return AdvInsnBuilder.callVirtual(
+                builder,
+                "java/lang/StringBuilder",
+                "toString",
+                "java/lang/String");
+    }
+
+    private static Expr objectClass()
+    {
+        return AdvInsnBuilder.constant(org.objectweb.asm.Type.getType("Ljava/lang/Object;"));
+    }
+
+    private static Expr objectArrayClass()
+    {
+        return AdvInsnBuilder.constant(org.objectweb.asm.Type.getType("[Ljava/lang/Object;"));
+    }
+
+    private static Expr voidClass()
+    {
+        return AdvInsnBuilder.staticField("java/lang/Void", "TYPE", "java/lang/Class");
+    }
+
+    private static Expr primitiveType(String wrapper)
+    {
+        return AdvInsnBuilder.staticField(wrapper, "TYPE", "java/lang/Class");
+    }
+
+    private static Local classArray(AdvInsnBuilder ib, String name, Expr... values)
+    {
+        Local array = ib.var(name, "[Ljava/lang/Class;");
+        ib.set(array, AdvInsnBuilder.newArray("java/lang/Class", AdvInsnBuilder.constant(values.length)));
+        for (int i = 0; i < values.length; i++)
+        {
+            ib.setArray(array, AdvInsnBuilder.constant(i), values[i]);
+        }
+        return array;
+    }
+
+    private static Expr getterHandleType()
+    {
+        return AdvInsnBuilder.callStatic(
+                "java/lang/invoke/MethodType",
+                "methodType",
+                "java/lang/invoke/MethodType",
+                objectClass(),
+                objectClass());
+    }
+
+    private static Expr methodType(Expr returnType, Expr leadingParameter, Expr trailingParameters)
+    {
+        return AdvInsnBuilder.callStatic(
+                "java/lang/invoke/MethodType",
+                "methodType",
+                "java/lang/invoke/MethodType",
+                returnType,
+                leadingParameter,
+                trailingParameters);
+    }
+
+    private static void dropLeadingObjectArgument(AdvInsnBuilder ib, Local handle)
+    {
+        Local leadingObject = classArray(ib, "leadingObject", objectClass());
+        ib.set(handle, AdvInsnBuilder.callStatic(
+                "java/lang/invoke/MethodHandles",
+                "dropArguments",
+                "java/lang/invoke/MethodHandle",
+                handle,
+                AdvInsnBuilder.constant(0),
+                leadingObject));
+    }
+
     private static void validateBranches()
     {
         for (Opcs opcode : Opcs.values())
         {
+            if(opcode == Opcs.INVOKEDYNAMIC)
+            {
+                continue;
+            }
             if (!branches.containsKey(opcode))
             {
                 throw new IllegalStateException("No InterpretBranch for " + opcode);

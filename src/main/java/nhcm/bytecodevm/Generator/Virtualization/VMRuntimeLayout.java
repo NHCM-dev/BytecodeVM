@@ -24,7 +24,14 @@ public class VMRuntimeLayout
     public final MethodRef construct;
     public final MethodRef getField;
     public final MethodRef setField;
+    public final MethodRef fieldHandle;
+    public final MethodRef adaptFieldHandle;
     public final MethodRef findField;
+    public final MethodRef findMethod;
+    public final MethodRef adaptMethodHandle;
+    public final MethodRef adaptDirectMethodHandle;
+    public final MethodRef adaptConstructorHandle;
+    public final MethodRef coerceArgument;
     public final MethodRef cloneArray;
     public final MethodRef findExceptionHandler;
     public final MethodRef monitorFor;
@@ -67,9 +74,30 @@ public class VMRuntimeLayout
         this.setField = method(
                 "setField",
                 "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZLjava/lang/Object;Ljava/lang/Object;)V");
+        this.fieldHandle = method(
+                "fieldHandle",
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ZZ)Ljava/lang/invoke/MethodHandle;");
+        this.adaptFieldHandle = method(
+                "adaptFieldHandle",
+                "(Ljava/lang/reflect/Field;ZZ)Ljava/lang/invoke/MethodHandle;");
         this.findField = method(
                 "findField",
                 "(Ljava/lang/Class;Ljava/lang/String;)Ljava/lang/reflect/Field;");
+        this.findMethod = method(
+                "findMethod",
+                "(Ljava/lang/Class;Ljava/lang/String;[Ljava/lang/Class;)Ljava/lang/reflect/Method;");
+        this.adaptMethodHandle = method(
+                "adaptMethodHandle",
+                "(Ljava/lang/reflect/Method;ZI)Ljava/lang/invoke/MethodHandle;");
+        this.adaptDirectMethodHandle = method(
+                "adaptDirectMethodHandle",
+                "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/invoke/MethodType;Z)Ljava/lang/invoke/MethodHandle;");
+        this.adaptConstructorHandle = method(
+                "adaptConstructorHandle",
+                "(Ljava/lang/reflect/Constructor;I)Ljava/lang/invoke/MethodHandle;");
+        this.coerceArgument = method(
+                "coerceArgument",
+                "(Ljava/lang/Object;Ljava/lang/Class;)Ljava/lang/Object;");
         this.cloneArray = method("cloneArray", "(Ljava/lang/Object;)Ljava/lang/Object;");
         this.findExceptionHandler = method(
                 "findExceptionHandler",

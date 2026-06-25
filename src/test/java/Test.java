@@ -18,6 +18,7 @@ public class Test
 
     public static void main(String[] args)
     {
+        StringBuilder stringBuilder;
         MethodNode method = new MethodNode(
                 Opcodes.ACC_PUBLIC | Opcodes.ACC_STATIC,
                 "generatedScore",
