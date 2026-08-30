@@ -31,6 +31,11 @@ The runnable fat jar is generated at:
 build/libs/BytecodeVM-X.X.X.jar
 ```
 
+The BytecodeVM tool requires JDK 21, but generated VM classes target Java 8
+(class-file version 52) and protected Java 8 applications can run on a Java 8
+runtime. Optional APIs introduced by newer JDKs are detected without linking
+them into Java 8 execution paths.
+
 ## Usage
 
 Every invocation prints the BytecodeVM banner and version information. Show the command list

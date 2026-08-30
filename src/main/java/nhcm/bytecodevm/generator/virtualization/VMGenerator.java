@@ -4068,7 +4068,7 @@ public class VMGenerator extends ClassObj
                     b.ifCondition(
                             AdvIBdr.isNull(target),
                             miss -> miss.ifElse(
-                                    AdvIBdr.isInstanceOf(exception, "java/lang/reflect/InaccessibleObjectException"),
+                                    isThrowableNamed(exception, "java.lang.reflect.InaccessibleObjectException"),
                                     direct -> {
                                         direct.set(target, AdvIBdr.callStatic(
                                                 vmLayout.owner,
@@ -4754,6 +4754,27 @@ public class VMGenerator extends ClassObj
         return AdvIBdr.newObject(
                 "java/lang/IllegalStateException",
                 AdvIBdr.cast(cause, "java/lang/Throwable"));
+    }
+
+    /**
+     * Tests for an optional JDK exception without emitting a symbolic class
+     * reference to it. InaccessibleObjectException was introduced in Java 9,
+     * while generated VM classes target Java 8.
+     */
+    private static Condition isThrowableNamed(Expr throwable, String className)
+    {
+        return AdvIBdr.and(
+                AdvIBdr.notNull(throwable),
+                AdvIBdr.isTrue(AdvIBdr.callVirtual(
+                        AdvIBdr.callVirtual(
+                                AdvIBdr.callVirtual(throwable, "java/lang/Object", "getClass", "java/lang/Class"),
+                                "java/lang/Class",
+                                "getName",
+                                "java/lang/String"),
+                        "java/lang/String",
+                        "equals",
+                        "Z",
+                        AdvIBdr.cast(AdvIBdr.constant(className), "java/lang/Object"))));
     }
 
     private static Expr classForName(Expr name, Expr loader)
