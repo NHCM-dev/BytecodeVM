@@ -242,8 +242,8 @@ exclusions:
 | `dynamicStateKey` | `true`, `false` | `true`   | Adds block-entry state capsules and a rolling per-record key chain used by opcode, layout, and operand decoding. |
 | `virtualControlFlowGraph` | `true`, `false` | `true`   | Stores methods as shuffled virtual basic blocks and resolves instruction indexes through block-local lookup. |
 | `constantFix` | `true`, `false` | `true`  | Moves `ConstantValue` data from static final fields into `<clinit>` assignments, updates initializer stack metadata, and clears the field value attribute. |
-| `preEncryptStrings` | `true`, `false` | `true` | Replaces string constants with per-site encrypted integer data and an inline runtime decoder before virtualization. |
-| `preEncryptNumbers` | `true`, `false` | `true` | Replaces integer, long, float, and double constants with per-site encrypted bit patterns reconstructed at runtime before virtualization. |
+| `preEncryptStrings` | `true`, `false` | `true` | Adaptively replaces selected string constants with per-site encrypted integer data and an inline runtime decoder before virtualization. Selection accounts for method size, constant count, text length, and estimated generated growth. |
+| `preEncryptNumbers` | `true`, `false` | `true` | Adaptively replaces selected integer, long, float, and double constants with encrypted bit patterns while retaining enough size headroom for virtualization. |
 | `removeAnnotations` | `true`, `false` | `true` | Removes BytecodeVM SDK annotations from classes and methods after their options have been applied. Other application annotations are untouched. |
 | `watermark` | key/value map | `{}` | Adds custom fields to the mandatory bytecode-embedded watermark. Empty maps receive a default label. |
 | `includeMethodsCalledWithin` | `true`, `false` | `false`  | Recursively includes target-jar methods called from explicitly included methods. |
@@ -273,7 +273,7 @@ repositories {
 }
 
 dependencies {
-    compileOnly 'io.github.nhcm-dev:bytecodevm-sdk:2.1.0'
+    compileOnly 'io.github.nhcm-dev:bytecodevm-sdk:2.1.1'
 }
 ```
 
@@ -283,7 +283,7 @@ For Maven projects, use `provided` scope:
 <dependency>
     <groupId>io.github.nhcm-dev</groupId>
     <artifactId>bytecodevm-sdk</artifactId>
-    <version>2.1.0</version>
+    <version>2.1.1</version>
     <scope>provided</scope>
 </dependency>
 ```
@@ -315,7 +315,7 @@ public final class LicenseService {
 }
 ```
 
-Every SDK option uses `CONFIG` to inherit its value from the enclosing class annotation and then YAML. Explicit class or method SDK values override YAML, and method values override class values. A structure override is assigned to a compatible VM set, so it does not silently retain an incompatible global VM structure. `inspect` and `protect` emit a warning when an SDK structure falls outside the configured automatic tier.
+Every SDK option using `CONFIG` inherits its value from the enclosing class annotation and then YAML. Explicit class or method SDK values override YAML, and method values override class values. `@Virtualize.preEncryptStrings` and `preEncryptNumbers` default to `ENABLED`; set either to `Toggle.DISABLED` for a target that should retain its original constants. A structure override is assigned to a compatible VM set, so it does not silently retain an incompatible global VM structure. `inspect` and `protect` emit a warning when an SDK structure falls outside the configured automatic tier.
 
 `VMOptions` groups the low-level YAML switches into three practical controls. `encrypt` controls virtual addresses, operands, per-method opcode maps, dynamic constant decryption, constant binding, and dynamic state keys. `shuffle` controls constants, split streams, instruction blocks, and virtual-CFG layout. `obfuscate` controls dispatch obfuscation and dynamic CodePool construction. Explicitly enabling any group also enables `protectCodePool`; disabling one group leaves the other groups unchanged. Fine-grained tuning remains available in YAML.
 
@@ -331,6 +331,8 @@ import nhcm.bytecodevm.sdk.enums.Toggle;
 import nhcm.bytecodevm.sdk.enums.VMStructure;
 
 @Virtualize(
+    preEncryptStrings = Toggle.ENABLED,
+    preEncryptNumbers = Toggle.ENABLED,
     vm = @VMOptions(
         structure = VMStructure.DATA_FLOW,
         encrypt = Toggle.ENABLED,

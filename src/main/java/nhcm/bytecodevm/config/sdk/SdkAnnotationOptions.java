@@ -7,6 +7,8 @@ import nhcm.bytecodevm.enums.VMStructure;
 public record SdkAnnotationOptions(
         boolean present,
         Boolean enabled,
+        Boolean preEncryptStrings,
+        Boolean preEncryptNumbers,
         VMStructure vmStructure,
         Boolean encrypt,
         Boolean shuffle,
@@ -34,6 +36,8 @@ public record SdkAnnotationOptions(
                 null,
                 null,
                 null,
+                null,
+                null,
                 null);
     }
 
@@ -47,6 +51,8 @@ public record SdkAnnotationOptions(
         return new SdkAnnotationOptions(
                 present || child.present,
                 choose(enabled, child.enabled),
+                choose(preEncryptStrings, child.preEncryptStrings),
+                choose(preEncryptNumbers, child.preEncryptNumbers),
                 choose(vmStructure, child.vmStructure),
                 choose(encrypt, child.encrypt),
                 choose(shuffle, child.shuffle),

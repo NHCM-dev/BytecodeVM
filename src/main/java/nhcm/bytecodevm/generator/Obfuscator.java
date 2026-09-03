@@ -10,6 +10,7 @@ import nhcm.bytecodevm.enums.VMStructure;
 import nhcm.bytecodevm.generator.editor.transformers.ConstantFixTransformer;
 import nhcm.bytecodevm.generator.editor.transformers.NumberTransformer;
 import nhcm.bytecodevm.generator.editor.transformers.StringTransformer;
+import nhcm.bytecodevm.generator.editor.transformers.ConstantEncryptionStats;
 import nhcm.bytecodevm.generator.watermark.WatermarkGenerator;
 import nhcm.bytecodevm.generator.watermark.WatermarkPlan;
 import nhcm.bytecodevm.generator.globalclass.MethodFrameGenerator;
@@ -201,6 +202,12 @@ public class Obfuscator
 
         for (ClassNode owner : classes)
         {
+            boolean generatedVmClass = registeredByRuntime.keySet().stream().anyMatch(
+                    runtime -> owner.name.equals(runtime) || owner.name.startsWith(runtime + '$'));
+            if (generatedVmClass)
+            {
+                continue;
+            }
             for (MethodNode method : owner.methods)
             {
                 for (AbstractInsnNode instruction = method.instructions.getFirst();
@@ -267,17 +274,40 @@ public class Obfuscator
         {
             logger.info("{}", LogColors.scan("Moved " + LogColors.strong(fixedConstants) + " static final constant(s) into <clinit>"));
         }
-        int encryptedStrings = new StringTransformer(config).transform(classNodes);
-        if(encryptedStrings != 0)
+        // Numbers run first so they only see source constants, not the integer
+        // material emitted by the string decoder pass.
+        NumberTransformer numberTransformer = new NumberTransformer(config);
+        int encryptedNumbers = numberTransformer.transform(classNodes);
+        ConstantEncryptionStats numberStats = numberTransformer.stats();
+        if(numberStats.candidates() != 0)
         {
-            logger.info("{}", LogColors.scan("Encrypted " + LogColors.strong(encryptedStrings) + " strings before virtualization"));
+            logger.info("{}", LogColors.scan(
+                    "Pre-encrypted " + LogColors.strong(encryptedNumbers) + "/" +
+                            LogColors.strong(numberStats.candidates()) + " number(s) before virtualization" +
+                            adaptiveSuffix(numberStats)));
         }
-        int encryptedNumbers = new NumberTransformer(config).transform(classNodes);
-        if(encryptedNumbers != 0)
+        StringTransformer stringTransformer = new StringTransformer(config);
+        int encryptedStrings = stringTransformer.transform(classNodes);
+        ConstantEncryptionStats stringStats = stringTransformer.stats();
+        if(stringStats.candidates() != 0)
         {
-            logger.info("{}", LogColors.scan("Encrypted " + LogColors.strong(encryptedNumbers) + " numbers before virtualization"));
+            logger.info("{}", LogColors.scan(
+                    "Pre-encrypted " + LogColors.strong(encryptedStrings) + "/" +
+                            LogColors.strong(stringStats.candidates()) + " string(s) before virtualization" +
+                            adaptiveSuffix(stringStats)));
         }
         return new PreTransformStats(fixedConstants, encryptedStrings, encryptedNumbers);
+    }
+
+    private static String adaptiveSuffix(ConstantEncryptionStats stats)
+    {
+        String growth = "estimated +" + LogColors.strong(stats.estimatedGrowth()) + " byte(s)";
+        if (stats.skipped() == 0)
+        {
+            return " (" + growth + ')';
+        }
+        return " (" + growth + ", skipped " + LogColors.strong(stats.skipped()) +
+                " to keep generated methods within the adaptive size budget)";
     }
 
     private void processJar(JarTransformer.JarContext context)

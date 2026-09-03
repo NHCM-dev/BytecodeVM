@@ -27,6 +27,12 @@ public @interface Virtualize
     /** Per-target VM overrides. */
     VMOptions vm() default @VMOptions;
 
+    /** Pre-encrypts string constants selected for this target before virtualization. */
+    Toggle preEncryptStrings() default Toggle.ENABLED;
+
+    /** Pre-encrypts primitive number constants selected for this target before virtualization. */
+    Toggle preEncryptNumbers() default Toggle.ENABLED;
+
     /** Per-target SuperInstruction overrides. */
     SuperInstructionOptions superInstructions() default @SuperInstructionOptions;
 

@@ -2,6 +2,7 @@ package nhcm.bytecodevm.generator.editor.transformers;
 
 import nhcm.bytecodevm.config.BytecodeVMConfig;
 import nhcm.bytecodevm.generator.abstracts.Transformer;
+import nhcm.bytecodevm.config.sdk.SdkAnnotationReader;
 import nhcm.bytecodevm.utils.MethodUtils;
 import nhcm.bytecodevm.utils.RandomUtils;
 import org.objectweb.asm.Opcodes;
@@ -21,6 +22,8 @@ import java.util.List;
 /** Reconstructs primitive number constants from per-site encrypted bit patterns. */
 public class NumberTransformer extends Transformer
 {
+    private ConstantEncryptionStats stats = ConstantEncryptionStats.empty();
+
     public NumberTransformer(BytecodeVMConfig config)
     {
         super(config, "preEncryptNumbers");
@@ -29,17 +32,30 @@ public class NumberTransformer extends Transformer
     @Override
     public int transform(Collection<ClassNode> classNodes)
     {
-        if (!config.preEncryptNumbers)
-        {
-            return 0;
-        }
-
         int changed = 0;
+        int candidatesSeen = 0;
+        long estimatedGrowth = 0L;
+        AdaptiveEncryptionBudget.Global globalBudget =
+                AdaptiveEncryptionBudget.global(classNodes, AdaptiveEncryptionBudget.Kind.NUMBER);
         for (ClassNode owner : classNodes)
         {
             for (MethodNode method : owner.methods)
             {
-                if (!MethodUtils.hasBody(method) || !shouldEncrypt(owner, method, null))
+                if (!MethodUtils.hasBody(method))
+                {
+                    continue;
+                }
+
+                SdkAnnotationReader.MethodDirectives directives =
+                        SdkAnnotationReader.methodDirectives(owner, method);
+                Boolean sdkOverride = directives.excluded()
+                        ? Boolean.FALSE
+                        : directives.options().preEncryptNumbers();
+                if (!config.preEncryptNumbers && sdkOverride == null)
+                {
+                    continue;
+                }
+                if (!shouldEncrypt(owner, method, sdkOverride))
                 {
                     continue;
                 }
@@ -57,21 +73,47 @@ public class NumberTransformer extends Transformer
                     continue;
                 }
 
+                candidatesSeen += constants.size();
+                AdaptiveEncryptionBudget budget = AdaptiveEncryptionBudget.numbers(method, constants.size());
+                RandomUtils.shuffle(constants);
+
                 int extraStack = 0;
                 for (AbstractInsnNode instruction : constants)
                 {
                     Number value = numberValue(instruction);
                     InsnList replacement = replacement(value);
+                    int generatedBytes = AdaptiveEncryptionBudget.bytecodeSize(replacement);
+                    int originalBytes = AdaptiveEncryptionBudget.bytecodeSize(instruction);
+                    if (!globalBudget.reserve(generatedBytes, originalBytes))
+                    {
+                        continue;
+                    }
+                    if (!budget.reserve(generatedBytes, originalBytes, 1))
+                    {
+                        globalBudget.release(generatedBytes, originalBytes);
+                        continue;
+                    }
                     method.instructions.insertBefore(instruction, replacement);
                     method.instructions.remove(instruction);
                     extraStack = Math.max(extraStack,
                             value instanceof Long || value instanceof Double ? 2 : 1);
                     changed++;
                 }
+                estimatedGrowth += budget.estimatedGrowth();
                 method.maxStack += extraStack;
             }
         }
+        stats = new ConstantEncryptionStats(
+                candidatesSeen,
+                changed,
+                candidatesSeen - changed,
+                estimatedGrowth);
         return changed;
+    }
+
+    public ConstantEncryptionStats stats()
+    {
+        return stats;
     }
 
     private static Number numberValue(AbstractInsnNode instruction)

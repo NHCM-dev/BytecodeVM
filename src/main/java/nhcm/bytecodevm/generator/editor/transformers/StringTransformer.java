@@ -4,6 +4,7 @@ import nhcm.bytecodevm.advInsn.AdvIBdr;
 import nhcm.bytecodevm.advInsn.Expr;
 import nhcm.bytecodevm.advInsn.Local;
 import nhcm.bytecodevm.config.BytecodeVMConfig;
+import nhcm.bytecodevm.config.sdk.SdkAnnotationReader;
 import nhcm.bytecodevm.generator.abstracts.Transformer;
 import nhcm.bytecodevm.utils.MethodUtils;
 import nhcm.bytecodevm.utils.RandomUtils;
@@ -15,6 +16,8 @@ import java.util.*;
 
 public class StringTransformer extends Transformer
 {
+    private ConstantEncryptionStats stats = ConstantEncryptionStats.empty();
+
     public StringTransformer(BytecodeVMConfig config)
     {
         super(config, "preEncryptStrings");
@@ -23,21 +26,31 @@ public class StringTransformer extends Transformer
     @Override
     public int transform(Collection<ClassNode> classNodes)
     {
-        if (!config.preEncryptStrings)
-        {
-            return 0;
-        }
         int changed = 0;
+        int candidatesSeen = 0;
+        long estimatedGrowth = 0L;
+        AdaptiveEncryptionBudget.Global globalBudget =
+                AdaptiveEncryptionBudget.global(classNodes, AdaptiveEncryptionBudget.Kind.STRING);
 
         for(ClassNode classNode : classNodes)
         {
             for(MethodNode method : classNode.methods)
             {
-                if(!shouldEncrypt(classNode, method, null))
+                if(!MethodUtils.hasBody(method))
                 {
                     continue;
                 }
-                if(!MethodUtils.hasBody(method))
+
+                SdkAnnotationReader.MethodDirectives directives =
+                        SdkAnnotationReader.methodDirectives(classNode, method);
+                Boolean sdkOverride = directives.excluded()
+                        ? Boolean.FALSE
+                        : directives.options().preEncryptStrings();
+                if (!config.preEncryptStrings && sdkOverride == null)
+                {
+                    continue;
+                }
+                if(!shouldEncrypt(classNode, method, sdkOverride))
                 {
                     continue;
                 }
@@ -56,6 +69,16 @@ public class StringTransformer extends Transformer
                 {
                     continue;
                 }
+
+                candidatesSeen += ldcs.size();
+                long characters = ldcs.stream()
+                        .mapToLong(ldc -> ((String) ldc.cst).length())
+                        .sum();
+                AdaptiveEncryptionBudget budget =
+                        AdaptiveEncryptionBudget.strings(method, ldcs.size(), characters);
+                RandomUtils.shuffle(ldcs);
+                ldcs.sort(Comparator.comparingInt(
+                        (LdcInsnNode ldc) -> ((String) ldc.cst).length()).reversed());
 
                 Map<InsnList, LdcInsnNode> replacements = new LinkedHashMap<>();
 
@@ -261,6 +284,18 @@ public class StringTransformer extends Transformer
 
                     InsnList replacement = ib.toInsnList();
 
+                    int generatedBytes = AdaptiveEncryptionBudget.bytecodeSize(replacement);
+                    int originalBytes = AdaptiveEncryptionBudget.bytecodeSize(ldc);
+                    if(!globalBudget.reserve(generatedBytes, originalBytes))
+                    {
+                        continue;
+                    }
+                    if(!budget.reserve(generatedBytes, originalBytes, str.length()))
+                    {
+                        globalBudget.release(generatedBytes, originalBytes);
+                        continue;
+                    }
+
                     replacements.put(replacement, ldc);
                     requiredMaxLocals = Math.max(requiredMaxLocals, ib.nextLocalIndex());
                 }
@@ -277,11 +312,25 @@ public class StringTransformer extends Transformer
                     changed++;
                 }
                 method.maxLocals = requiredMaxLocals;
-                method.maxStack += 8;
+                if(!replacements.isEmpty())
+                {
+                    method.maxStack += 8;
+                }
+                estimatedGrowth += budget.estimatedGrowth();
             }
         }
 
+        stats = new ConstantEncryptionStats(
+                candidatesSeen,
+                changed,
+                candidatesSeen - changed,
+                estimatedGrowth);
         return changed;
+    }
+
+    public ConstantEncryptionStats stats()
+    {
+        return stats;
     }
 
     /**

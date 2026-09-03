@@ -70,6 +70,14 @@ public final class SdkAnnotationReader
     {
         SdkAnnotationOptions options = methodDirectives(owner, method).options;
         BytecodeVMConfig.BytecodeVMConfigBuilder builder = yamlConfig.toBuilder();
+        if (options.preEncryptStrings() != null)
+        {
+            builder.preEncryptStrings(options.preEncryptStrings());
+        }
+        if (options.preEncryptNumbers() != null)
+        {
+            builder.preEncryptNumbers(options.preEncryptNumbers());
+        }
         if (options.vmStructure() != null)
         {
             builder.vmStructure(options.vmStructure());
@@ -128,6 +136,8 @@ public final class SdkAnnotationReader
         return new SdkAnnotationOptions(
                 true,
                 toggle(root.get("enabled"), true, target + " @Virtualize.enabled"),
+                toggle(root.get("preEncryptStrings"), true, target + " @Virtualize.preEncryptStrings"),
+                toggle(root.get("preEncryptNumbers"), true, target + " @Virtualize.preEncryptNumbers"),
                 vmStructure(vmValues.get("structure"), target),
                 toggle(vmValues.get("encrypt"), null, target + " @VMOptions.encrypt"),
                 toggle(vmValues.get("shuffle"), null, target + " @VMOptions.shuffle"),
