@@ -24,6 +24,8 @@ import nhcm.bytecodevm.utils.LogColors;
 import nhcm.bytecodevm.utils.MethodUtils;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.IntInsnNode;
+import org.objectweb.asm.tree.LdcInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 import org.slf4j.Logger;
@@ -176,6 +178,7 @@ public class Obfuscator
                     result.transformedTarget.size());
             logger.info("{}", LogColors.success("Done virtualizing VM: " + LogColors.strong(generator.vmClassName)));
         }
+        validateFinalCodeIds(context.classes.values(), generators);
         logger.info("{}", LogColors.success("Done virtualizing all classes"));
         if (config.removeAnnotations)
         {
@@ -184,6 +187,77 @@ public class Obfuscator
         }
         outputClassCount = context.classes.size();
         outputResourceCount = context.resources.size();
+    }
+
+    private void validateFinalCodeIds(
+            Collection<ClassNode> classes,
+            Collection<VMSetGenerator> generators)
+    {
+        Map<String, Set<Integer>> registeredByRuntime = new HashMap<>();
+        for (VMSetGenerator generator : generators)
+        {
+            registeredByRuntime.put(generator.vmClassName, generator.registeredCodeIds());
+        }
+
+        for (ClassNode owner : classes)
+        {
+            for (MethodNode method : owner.methods)
+            {
+                for (AbstractInsnNode instruction = method.instructions.getFirst();
+                     instruction != null;
+                     instruction = instruction.getNext())
+                {
+                    if (!(instruction instanceof MethodInsnNode))
+                    {
+                        continue;
+                    }
+                    MethodInsnNode call = (MethodInsnNode) instruction;
+                    Set<Integer> registered = registeredByRuntime.get(call.owner);
+                    if (registered == null || !"execute".equals(call.name) || !call.desc.startsWith("(I"))
+                    {
+                        continue;
+                    }
+
+                    Integer codeId = nearestIntegerConstant(call.getPrevious());
+                    if (codeId != null && !registered.contains(codeId))
+                    {
+                        throw new IllegalStateException(
+                                "Generated VM wrapper references an unknown code id: " + codeId +
+                                " in " + owner.name + '.' + method.name + method.desc +
+                                " (runtime " + call.owner + ')');
+                    }
+                }
+            }
+        }
+    }
+
+    private static Integer nearestIntegerConstant(AbstractInsnNode instruction)
+    {
+        for (int remaining = 16; instruction != null && remaining-- > 0; instruction = instruction.getPrevious())
+        {
+            if (instruction instanceof LdcInsnNode)
+            {
+                Object constant = ((LdcInsnNode) instruction).cst;
+                if (constant instanceof Integer)
+                {
+                    return (Integer) constant;
+                }
+            }
+            else if (instruction instanceof IntInsnNode)
+            {
+                return ((IntInsnNode) instruction).operand;
+            }
+            else
+            {
+                int opcode = instruction.getOpcode();
+                if (opcode >= org.objectweb.asm.Opcodes.ICONST_M1 &&
+                        opcode <= org.objectweb.asm.Opcodes.ICONST_5)
+                {
+                    return opcode - org.objectweb.asm.Opcodes.ICONST_0;
+                }
+            }
+        }
+        return null;
     }
 
     private PreTransformStats runPreTransformers(Collection<ClassNode> classNodes)

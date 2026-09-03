@@ -183,6 +183,7 @@ public class VMSetGenerator
         {
             generateCodePools(codePoolPartitions, stage);
         }
+        validateCodePoolCoverage();
 
         ClassNode vmClass;
         List<ClassNode> vmAuxiliaryClasses;
@@ -458,6 +459,37 @@ public class VMSetGenerator
                     superInstructions));
             progress.advance(poolClassName);
         }
+    }
+
+    private void validateCodePoolCoverage()
+    {
+        Set<Integer> registeredCodeIds = new HashSet<>();
+        for (CodePoolGenerator generator : codePoolGenerators)
+        {
+            registeredCodeIds.addAll(generator.registeredCodeIds());
+        }
+        for (CompiledMethod method : compiledMethods)
+        {
+            for (int codeId : method.codeIds)
+            {
+                if (!registeredCodeIds.contains(codeId))
+                {
+                    throw new IllegalStateException(
+                            "VM code id is not registered before replacement: " + codeId +
+                            " for " + describeMethod(method.owner, method.source));
+                }
+            }
+        }
+    }
+
+    Set<Integer> registeredCodeIds()
+    {
+        Set<Integer> registeredCodeIds = new HashSet<>();
+        for (CodePoolGenerator generator : codePoolGenerators)
+        {
+            registeredCodeIds.addAll(generator.registeredCodeIds());
+        }
+        return Collections.unmodifiableSet(registeredCodeIds);
     }
 
     private String poolClassName(int index, int partitionCount)

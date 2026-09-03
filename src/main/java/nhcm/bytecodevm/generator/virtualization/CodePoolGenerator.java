@@ -879,6 +879,11 @@ public class CodePoolGenerator extends ClassObj
         return maximum;
     }
 
+    public Set<Integer> registeredCodeIds()
+    {
+        return Collections.unmodifiableSet(new HashSet<>(protectedMethodById.keySet()));
+    }
+
     private static void validateUniqueCodeIds(List<CompiledMethod> methods)
     {
         Set<Integer> codeIds = new HashSet<>();
