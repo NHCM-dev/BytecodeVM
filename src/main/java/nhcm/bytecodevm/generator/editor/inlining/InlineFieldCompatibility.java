@@ -29,10 +29,7 @@ public final class InlineFieldCompatibility
             {
                 for (AbstractInsnNode instruction : method.instructions)
                 {
-                    if (!(instruction instanceof MethodInsnNode call) ||
-                        !"java/lang/Class".equals(call.owner) ||
-                        !("getField".equals(call.name) || "getDeclaredField".equals(call.name)) ||
-                        !"(Ljava/lang/String;)Ljava/lang/reflect/Field;".equals(call.desc))
+                    if (!(instruction instanceof MethodInsnNode call) || !isFieldLookup(call))
                     {
                         continue;
                     }
@@ -45,6 +42,20 @@ public final class InlineFieldCompatibility
             }
         }
         return new InlineFieldCompatibility(reflectedNames);
+    }
+
+    private static boolean isFieldLookup(MethodInsnNode call)
+    {
+        if ("java/lang/Class".equals(call.owner) &&
+            ("getField".equals(call.name) || "getDeclaredField".equals(call.name)) &&
+            "(Ljava/lang/String;)Ljava/lang/reflect/Field;".equals(call.desc))
+        {
+            return true;
+        }
+        return "java/lang/invoke/MethodHandles$Lookup".equals(call.owner) &&
+               ("findVarHandle".equals(call.name) || "findStaticVarHandle".equals(call.name)) &&
+               "(Ljava/lang/Class;Ljava/lang/String;Ljava/lang/Class;)Ljava/lang/invoke/VarHandle;"
+                       .equals(call.desc);
     }
 
     boolean reflects(String fieldName)

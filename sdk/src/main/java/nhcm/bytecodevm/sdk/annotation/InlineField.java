@@ -8,7 +8,11 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
-/** Moves a field into BytecodeVM's keyed encrypted field container. */
+/**
+ * Moves a primitive, String, object, interface, or array field into BytecodeVM's keyed field storage.
+ * Reference identity is preserved through encrypted randomized handles, while instance owners are tracked
+ * by weak identity keys so field storage does not retain otherwise unreachable objects.
+ */
 @Documented
 @Retention(RetentionPolicy.CLASS)
 @Target(ElementType.FIELD)

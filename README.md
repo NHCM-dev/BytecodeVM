@@ -263,9 +263,9 @@ Every field is optional. Omitted fields inherit from the canonical `BytecodeVM.d
 | `constantFix` | `true`, `false` | `true`  | Moves `ConstantValue` data from static final fields into `<clinit>` assignments, updates initializer stack metadata, and clears the field value attribute. |
 | `preEncryptStrings` | `true`, `false` | `true` | Adaptively replaces selected string constants with per-site encrypted integer data and an inline runtime decoder before virtualization. Selection accounts for method size, constant count, text length, and estimated generated growth. |
 | `preEncryptNumbers` | `true`, `false` | `true` | Adaptively replaces selected integer, long, float, and double constants with encrypted bit patterns while retaining enough size headroom for virtualization. |
-| `inlineFields` | `true`, `false` | `true` | Removes selected primitive or String fields. Encryption, decryption, and direct storage access are expanded at each original field instruction; the storage class has no accessor or crypto methods. |
+| `inlineFields` | `true`, `false` | `true` | Removes selected fields of any JVM type. Primitive and String values are encrypted directly; object and array references use encrypted randomized handles. Storage and crypto bytecode are expanded at each original field instruction. |
 | `inlineCalledProtectedMethods` | `true`, `false` | `true` | Uses the protected method's original owner, name, and descriptor as its direct VM entry. No shared `MethodEntries` bridge class is generated. |
-| `inlineStaticFinals` | `true`, `false` | `true` | Applies direct access-site encryption and storage to selected static-final primitive or String fields. |
+| `inlineStaticFinals` | `true`, `false` | `true` | Applies direct access-site encryption and storage to selected static-final fields of any JVM type. |
 | `annotationOnly` | `true`, `false` | `false` | Restricts unsafe transforms to `@InlineField`, `@InlineFinal`, and method-level `@Virtualize` targets when enabled. The maximum-coverage default lets config match groups select them globally. |
 | `privateFieldOnly` | `true`, `false` | `false` | Limits config-selected field inlining to private fields when enabled. An explicit SDK field annotation is treated as an intentional override. |
 | `ignorePublicCalls` | `true`, `false` | `false` | Limits unsafe original-slot VM entry selection to private methods when enabled. The default also handles package, protected, and public call sites. |
@@ -391,12 +391,26 @@ public boolean verifyLicense(String key) {
 
 ## Member Inlining
 
-`inlineFields` removes selected primitive and String fields from their declaring classes and replaces
+`inlineFields` removes selected fields of any valid JVM type from their declaring classes and replaces
 ordinary `GETFIELD`, `PUTFIELD`, `GETSTATIC`, and `PUTSTATIC` instructions with in-place storage and
 crypto bytecode. Every field receives an independent randomized storage slot and cipher constants, and
-every write receives a fresh nonce. The generated storage class contains only encrypted record fields;
-it exposes no `get`, `set`, `encode`, or `decode` methods. Arbitrary object and array fields are skipped
-because a live Java object reference cannot be encrypted while preserving its identity and JVM semantics.
+every write receives a fresh nonce. The generated storage class exposes no `get`, `set`, `encode`, or
+`decode` methods. Primitive values and Strings are encrypted directly. Objects, interfaces, and arrays
+retain JVM identity through a shared reference vault keyed by randomized tokens, while field records contain
+only encrypted handles; null values and declared-type checks remain at the original access sites. Volatile
+fields are supported through synchronized or volatile storage paths.
+
+Instance records are indexed by generated weak identity keys containing the owner's `identityHashCode` and
+the field's randomized slot. They never call application `equals` or `hashCode`. A shared `ReferenceQueue`
+removes records after their owner becomes unreachable, and the record's separately encrypted cleanup token
+also releases its live object or array from the reference vault. Repeated writes release the previous token,
+and direct self-references use a reserved encrypted state without creating a strong vault path back to the
+owner. All instance fields share one concurrent weak table instead of allocating one Map per field.
+
+The public Java reference API does not provide true ephemeron tables. Direct `field == owner` references are
+handled explicitly, but an arbitrary stored object graph that indirectly points back to its owner can still
+keep that owner reachable through the vault. Exclude parent-linked graph fields from inlining when exact
+cycle collection is required; solving that case requires retaining an owner-local synthetic carrier field.
 
 `inlineStaticFinals` applies the same storage model specifically to static-final values. A `ConstantValue`
 is moved into the beginning of `<clinit>` before the field is removed, while an existing initializer is
@@ -419,7 +433,8 @@ symbol. With `annotationOnly: true`, this unsafe mode applies only to methods ca
 
 Member removal changes reflection, serialization, framework injection, and external binary APIs. The
 maximum-coverage defaults leave `privateFieldOnly` and `ignorePublicCalls` disabled; enable either limit when
-compatibility matters more than coverage. Record and enum storage, volatile fields, and fields referenced by
+compatibility matters more than coverage. Record and enum storage, fields written before a constructor has
+initialized `this`, and fields referenced by
 constant method handles are skipped. Fields used through recognizable constant-name reflection, Java
 serialization/externalization, or clone-compatible object layouts are also retained automatically.
 `includeReferencedMethods` automatically

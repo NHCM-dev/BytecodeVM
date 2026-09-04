@@ -347,8 +347,9 @@ public class Obfuscator
         PreTransformStats transforms = runPreTransformers(context.classes.values());
 
         String fieldRuntimeName = uniqueSupportClassName(context, "FieldStore");
+        String weakFieldKeyName = uniqueSupportClassName(context, "WeakIdentityKey");
         InlineFieldRuntimeGenerator.GeneratedRuntime fieldRuntime =
-                InlineFieldRuntimeGenerator.generate(fieldRuntimeName, namer);
+                InlineFieldRuntimeGenerator.generate(fieldRuntimeName, weakFieldKeyName, namer);
         InlineFieldTransformer fieldTransformer = new InlineFieldTransformer(
                 config,
                 context.classes.values(),
@@ -530,9 +531,9 @@ public class Obfuscator
         }
 
         inlineFieldResult = fieldTransformer.transform(protectedMethods);
-        if (inlineFieldResult.runtimeClass() != null)
+        if (!inlineFieldResult.runtimeClasses().isEmpty())
         {
-            context.addClass(inlineFieldResult.runtimeClass());
+            inlineFieldResult.runtimeClasses().forEach(context::addClass);
             logger.info("{}", LogColors.scan(
                     "Inlined " + LogColors.strong(inlineFieldResult.fields()) +
                             " field(s) and rewrote " + LogColors.strong(inlineFieldResult.accesses()) +

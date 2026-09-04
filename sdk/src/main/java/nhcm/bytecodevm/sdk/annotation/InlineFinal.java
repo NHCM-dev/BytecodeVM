@@ -8,7 +8,7 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
-/** Encrypts and removes a static-final field selected for protected inlining. */
+/** Encrypts and removes a static-final field of any valid JVM type selected for protected inlining. */
 @Documented
 @Retention(RetentionPolicy.CLASS)
 @Target(ElementType.FIELD)

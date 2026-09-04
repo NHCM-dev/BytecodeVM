@@ -72,7 +72,9 @@ public class BytecodeVM
 
             # UNSAFE: Member inlining can break reflection, serialization, frameworks, and external callers.
             # Enable it per match group or SDK field annotation only when every use is under your control.
-            # Selected primitive/String fields are removed; crypto and storage access are expanded at each GET/PUT.
+            # Selected fields of any JVM type are removed; crypto and storage access are expanded at each GET/PUT.
+            # Object and array identity is preserved through randomized encrypted handles in a reference vault.
+            # Instance owners use weak identity keys and a ReferenceQueue so FieldStore does not retain dead objects.
             # Selected protected methods keep their original signature as a direct VM entry without bridge classes.
             inlineFields: true
             inlineCalledProtectedMethods: true

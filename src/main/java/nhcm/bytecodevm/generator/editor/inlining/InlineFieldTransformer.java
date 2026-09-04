@@ -48,6 +48,7 @@ public final class InlineFieldTransformer
     private final Map<FieldId, Candidate> candidates = new LinkedHashMap<>();
     private final Map<FieldId, List<Access>> accesses = new LinkedHashMap<>();
     private final Set<FieldId> handleReferences = new LinkedHashSet<>();
+    private final Set<FieldId> preInitializationReferences = new LinkedHashSet<>();
     private final Map<MethodNode, Workspace> workspaces = new IdentityHashMap<>();
     private int unsupportedCandidates;
 
@@ -91,7 +92,8 @@ public final class InlineFieldTransformer
         for (Candidate candidate : candidates.values())
         {
             List<Access> fieldAccesses = accesses.getOrDefault(candidate.id, List.of());
-            boolean safe = !handleReferences.contains(candidate.id);
+            boolean safe = !handleReferences.contains(candidate.id) &&
+                           !preInitializationReferences.contains(candidate.id);
             for (Access access : fieldAccesses)
             {
                 if ("<init>".equals(access.method.name) || "<clinit>".equals(access.method.name))
@@ -111,12 +113,18 @@ public final class InlineFieldTransformer
             }
 
             boolean isStatic = (candidate.field.access & Opcodes.ACC_STATIC) != 0;
-            InlineFieldRuntimeGenerator.Storage storage = runtime.allocate(isStatic);
-            EncryptionBinding binding = EncryptionBinding.random();
             Type type = Type.getType(candidate.field.desc);
+            InlineFieldRuntimeGenerator.Storage storage = runtime.allocate(
+                    candidate.owner,
+                    isStatic,
+                    isIndirectReference(type));
+            EncryptionBinding binding = EncryptionBinding.random();
             if (candidate.field.value != null)
             {
-                addConstantInitializer(candidate, storage, binding, type);
+                if (isStatic)
+                {
+                    addConstantInitializer(candidate, storage, binding, type);
+                }
                 candidate.field.value = null;
             }
             for (Access access : fieldAccesses)
@@ -128,8 +136,8 @@ public final class InlineFieldTransformer
             inlined++;
         }
 
-        ClassNode runtimeClass = inlined == 0 ? null : runtime.classNode();
-        return new Result(runtimeClass, inlined, rewritten, skipped);
+        List<ClassNode> runtimeClasses = inlined == 0 ? List.of() : runtime.generatedClasses();
+        return new Result(runtimeClasses, inlined, rewritten, skipped);
     }
 
     private void collectCandidates()
@@ -152,7 +160,7 @@ public final class InlineFieldTransformer
                 {
                     continue;
                 }
-                if ((field.access & (Opcodes.ACC_VOLATILE | Opcodes.ACC_ENUM)) != 0)
+                if ((field.access & Opcodes.ACC_ENUM) != 0)
                 {
                     continue;
                 }
@@ -238,11 +246,39 @@ public final class InlineFieldTransformer
                         {
                             accesses.computeIfAbsent(id, ignored -> new ArrayList<>())
                                     .add(new Access(owner, method, fieldInsn));
+                            if (writtenBeforeConstructorInitialization(owner, method, fieldInsn))
+                            {
+                                preInitializationReferences.add(id);
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+    private static boolean writtenBeforeConstructorInitialization(
+            ClassNode owner,
+            MethodNode method,
+            FieldInsnNode field)
+    {
+        if (!"<init>".equals(method.name) || field.getOpcode() != Opcodes.PUTFIELD)
+        {
+            return false;
+        }
+        for (AbstractInsnNode instruction = method.instructions.getFirst();
+             instruction != null && instruction != field;
+             instruction = instruction.getNext())
+        {
+            if (instruction instanceof MethodInsnNode call &&
+                call.getOpcode() == Opcodes.INVOKESPECIAL &&
+                "<init>".equals(call.name) &&
+                (owner.name.equals(call.owner) || call.owner.equals(owner.superName)))
+            {
+                return false;
+            }
+        }
+        return true;
     }
 
     private void collectHandle(Object value)
@@ -304,19 +340,25 @@ public final class InlineFieldTransformer
             case Opcodes.GETFIELD ->
             {
                 replacement.add(new VarInsnNode(Opcodes.ASTORE, workspace.owner));
+                emitRequireOwner(replacement, workspace);
                 emitRead(replacement, storage, binding, type, workspace, true);
             }
             case Opcodes.PUTFIELD ->
             {
                 replacement.add(new VarInsnNode(type.getOpcode(Opcodes.ISTORE), workspace.value));
                 replacement.add(new VarInsnNode(Opcodes.ASTORE, workspace.owner));
+                emitRequireOwner(replacement, workspace);
                 emitWrite(replacement, storage, binding, type, workspace, true);
             }
             case Opcodes.GETSTATIC ->
-                    emitRead(replacement, storage, binding, type, workspace, false);
+            {
+                emitInitializeOwner(replacement, access.owner, storage);
+                emitRead(replacement, storage, binding, type, workspace, false);
+            }
             case Opcodes.PUTSTATIC ->
             {
                 replacement.add(new VarInsnNode(type.getOpcode(Opcodes.ISTORE), workspace.value));
+                emitInitializeOwner(replacement, access.owner, storage);
                 emitWrite(replacement, storage, binding, type, workspace, false);
             }
             default -> throw new IllegalStateException("Unknown field opcode: " + field.getOpcode());
@@ -324,6 +366,98 @@ public final class InlineFieldTransformer
         access.method.instructions.insertBefore(field, replacement);
         access.method.instructions.remove(field);
         access.method.maxStack = Math.max(access.method.maxStack + 12, 24);
+    }
+
+    private static void emitInitializeOwner(
+            InsnList out,
+            ClassNode accessingOwner,
+            InlineFieldRuntimeGenerator.Storage storage)
+    {
+        if (storage.initializationTriggerName() == null ||
+            accessingOwner.name.equals(storage.initializationOwner()))
+        {
+            return;
+        }
+        out.add(new FieldInsnNode(
+                Opcodes.GETSTATIC,
+                storage.initializationOwner(),
+                storage.initializationTriggerName(),
+                "I"));
+        out.add(new InsnNode(Opcodes.POP));
+    }
+
+    private static void emitDrainWeakStorage(
+            InsnList out,
+            InlineFieldRuntimeGenerator.Storage storage)
+    {
+        out.add(new FieldInsnNode(
+                Opcodes.GETSTATIC,
+                storage.owner(),
+                storage.referenceQueueName(),
+                "Ljava/lang/ref/ReferenceQueue;"));
+        out.add(new FieldInsnNode(
+                Opcodes.GETSTATIC,
+                storage.owner(),
+                storage.name(),
+                storage.descriptor()));
+        out.add(new FieldInsnNode(
+                Opcodes.GETSTATIC,
+                storage.owner(),
+                storage.referenceVaultName(),
+                "Ljava/util/concurrent/ConcurrentMap;"));
+        out.add(new MethodInsnNode(
+                Opcodes.INVOKESTATIC,
+                storage.weakKeyClassName(),
+                storage.drainMethodName(),
+                WeakIdentitySupportGenerator.DRAIN_DESCRIPTOR,
+                false));
+    }
+
+    private static void emitWeakIdentityKey(
+            InsnList out,
+            InlineFieldRuntimeGenerator.Storage storage,
+            Workspace workspace,
+            boolean persistent)
+    {
+        out.add(new TypeInsnNode(Opcodes.NEW, storage.weakKeyClassName()));
+        out.add(new InsnNode(Opcodes.DUP));
+        out.add(new VarInsnNode(Opcodes.ALOAD, workspace.owner));
+        pushInt(out, storage.fieldSlot());
+        if (persistent)
+        {
+            out.add(new FieldInsnNode(
+                    Opcodes.GETSTATIC,
+                    storage.owner(),
+                    storage.referenceQueueName(),
+                    "Ljava/lang/ref/ReferenceQueue;"));
+        }
+        else
+        {
+            out.add(new InsnNode(Opcodes.ACONST_NULL));
+        }
+        out.add(new MethodInsnNode(
+                Opcodes.INVOKESPECIAL,
+                storage.weakKeyClassName(),
+                "<init>",
+                WeakIdentitySupportGenerator.CONSTRUCTOR_DESCRIPTOR,
+                false));
+    }
+
+    private static void emitRequireOwner(InsnList out, Workspace workspace)
+    {
+        LabelNode present = new LabelNode();
+        out.add(new VarInsnNode(Opcodes.ALOAD, workspace.owner));
+        out.add(new JumpInsnNode(Opcodes.IFNONNULL, present));
+        out.add(new TypeInsnNode(Opcodes.NEW, "java/lang/NullPointerException"));
+        out.add(new InsnNode(Opcodes.DUP));
+        out.add(new MethodInsnNode(
+                Opcodes.INVOKESPECIAL,
+                "java/lang/NullPointerException",
+                "<init>",
+                "()V",
+                false));
+        out.add(new InsnNode(Opcodes.ATHROW));
+        out.add(present);
     }
 
     private void addConstantInitializer(
@@ -350,7 +484,15 @@ public final class InlineFieldTransformer
             Workspace workspace,
             boolean instance)
     {
-        pushInt(out, 2);
+        if (instance)
+        {
+            emitDrainWeakStorage(out, storage);
+        }
+        if (storage.storesReference())
+        {
+            emitRemovePreviousReference(out, storage, binding, workspace, instance);
+        }
+        pushInt(out, storage.storesReference() && storage.usesWeakIdentity() ? 3 : 2);
         out.add(new TypeInsnNode(Opcodes.ANEWARRAY, "java/lang/Object"));
         out.add(new VarInsnNode(Opcodes.ASTORE, workspace.record));
         out.add(new MethodInsnNode(
@@ -378,9 +520,13 @@ public final class InlineFieldTransformer
                 false));
         out.add(new InsnNode(Opcodes.AASTORE));
 
-        if (type.getSort() == Type.OBJECT)
+        if (isString(type))
         {
             emitStringWrite(out, binding, workspace);
+        }
+        else if (storage.storesReference())
+        {
+            emitReferenceWrite(out, storage, binding, workspace);
         }
         else
         {
@@ -405,11 +551,11 @@ public final class InlineFieldTransformer
                     storage.owner(),
                     storage.name(),
                     storage.descriptor()));
-            out.add(new VarInsnNode(Opcodes.ALOAD, workspace.owner));
+            emitWeakIdentityKey(out, storage, workspace, true);
             out.add(new VarInsnNode(Opcodes.ALOAD, workspace.record));
             out.add(new MethodInsnNode(
                     Opcodes.INVOKEINTERFACE,
-                    "java/util/Map",
+                    "java/util/concurrent/ConcurrentMap",
                     "put",
                     "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
                     true));
@@ -424,6 +570,237 @@ public final class InlineFieldTransformer
                     storage.name(),
                     storage.descriptor()));
         }
+    }
+
+    private static void emitRemovePreviousReference(
+            InsnList out,
+            InlineFieldRuntimeGenerator.Storage storage,
+            EncryptionBinding binding,
+            Workspace workspace,
+            boolean instance)
+    {
+        if (instance)
+        {
+            out.add(new FieldInsnNode(
+                    Opcodes.GETSTATIC,
+                    storage.owner(),
+                    storage.name(),
+                    storage.descriptor()));
+            emitWeakIdentityKey(out, storage, workspace, false);
+            out.add(new MethodInsnNode(
+                    Opcodes.INVOKEINTERFACE,
+                    "java/util/concurrent/ConcurrentMap",
+                    "get",
+                    "(Ljava/lang/Object;)Ljava/lang/Object;",
+                    true));
+            out.add(new TypeInsnNode(Opcodes.CHECKCAST, "[Ljava/lang/Object;"));
+        }
+        else
+        {
+            out.add(new FieldInsnNode(
+                    Opcodes.GETSTATIC,
+                    storage.owner(),
+                    storage.name(),
+                    storage.descriptor()));
+        }
+        out.add(new VarInsnNode(Opcodes.ASTORE, workspace.previousRecord));
+
+        LabelNode done = new LabelNode();
+        LabelNode hasToken = new LabelNode();
+        out.add(new VarInsnNode(Opcodes.ALOAD, workspace.previousRecord));
+        out.add(new JumpInsnNode(Opcodes.IFNULL, done));
+        out.add(new VarInsnNode(Opcodes.ALOAD, workspace.previousRecord));
+        pushInt(out, 1);
+        out.add(new InsnNode(Opcodes.AALOAD));
+        out.add(new InsnNode(Opcodes.DUP));
+        out.add(new JumpInsnNode(Opcodes.IFNONNULL, hasToken));
+        out.add(new InsnNode(Opcodes.POP));
+        out.add(new JumpInsnNode(Opcodes.GOTO, done));
+        out.add(hasToken);
+        out.add(new TypeInsnNode(Opcodes.CHECKCAST, "java/lang/Long"));
+        out.add(new MethodInsnNode(
+                Opcodes.INVOKEVIRTUAL,
+                "java/lang/Long",
+                "longValue",
+                "()J",
+                false));
+        out.add(new VarInsnNode(Opcodes.LSTORE, workspace.token));
+        out.add(new VarInsnNode(Opcodes.ALOAD, workspace.previousRecord));
+        pushInt(out, 0);
+        out.add(new InsnNode(Opcodes.AALOAD));
+        out.add(new TypeInsnNode(Opcodes.CHECKCAST, "java/lang/Long"));
+        out.add(new MethodInsnNode(
+                Opcodes.INVOKEVIRTUAL,
+                "java/lang/Long",
+                "longValue",
+                "()J",
+                false));
+        out.add(new VarInsnNode(Opcodes.LSTORE, workspace.nonce));
+        out.add(new FieldInsnNode(
+                Opcodes.GETSTATIC,
+                storage.owner(),
+                storage.referenceVaultName(),
+                "Ljava/util/concurrent/ConcurrentMap;"));
+        out.add(new VarInsnNode(Opcodes.LLOAD, workspace.token));
+        emitMask(out, binding, workspace.nonce);
+        out.add(new InsnNode(Opcodes.LXOR));
+        out.add(new MethodInsnNode(
+                Opcodes.INVOKESTATIC,
+                "java/lang/Long",
+                "valueOf",
+                "(J)Ljava/lang/Long;",
+                false));
+        out.add(new MethodInsnNode(
+                Opcodes.INVOKEINTERFACE,
+                "java/util/concurrent/ConcurrentMap",
+                "remove",
+                "(Ljava/lang/Object;)Ljava/lang/Object;",
+                true));
+        out.add(new InsnNode(Opcodes.POP));
+        out.add(done);
+    }
+
+    private static void emitReferenceWrite(
+            InsnList out,
+            InlineFieldRuntimeGenerator.Storage storage,
+            EncryptionBinding binding,
+            Workspace workspace)
+    {
+        LabelNode isNull = new LabelNode();
+        LabelNode isOwner = new LabelNode();
+        LabelNode generate = new LabelNode();
+        LabelNode unique = new LabelNode();
+        LabelNode done = new LabelNode();
+        out.add(new VarInsnNode(Opcodes.ALOAD, workspace.value));
+        out.add(new JumpInsnNode(Opcodes.IFNULL, isNull));
+        if (storage.usesWeakIdentity())
+        {
+            out.add(new VarInsnNode(Opcodes.ALOAD, workspace.value));
+            out.add(new VarInsnNode(Opcodes.ALOAD, workspace.owner));
+            out.add(new JumpInsnNode(Opcodes.IF_ACMPEQ, isOwner));
+        }
+        out.add(generate);
+        out.add(new MethodInsnNode(
+                Opcodes.INVOKESTATIC,
+                "java/util/concurrent/ThreadLocalRandom",
+                "current",
+                "()Ljava/util/concurrent/ThreadLocalRandom;",
+                false));
+        out.add(new MethodInsnNode(
+                Opcodes.INVOKEVIRTUAL,
+                "java/util/concurrent/ThreadLocalRandom",
+                "nextLong",
+                "()J",
+                false));
+        out.add(new VarInsnNode(Opcodes.LSTORE, workspace.token));
+        out.add(new VarInsnNode(Opcodes.LLOAD, workspace.token));
+        out.add(new InsnNode(Opcodes.LCONST_0));
+        out.add(new InsnNode(Opcodes.LCMP));
+        out.add(new JumpInsnNode(Opcodes.IFEQ, generate));
+        out.add(new FieldInsnNode(
+                Opcodes.GETSTATIC,
+                storage.owner(),
+                storage.referenceVaultName(),
+                "Ljava/util/concurrent/ConcurrentMap;"));
+        out.add(new VarInsnNode(Opcodes.LLOAD, workspace.token));
+        out.add(new MethodInsnNode(
+                Opcodes.INVOKESTATIC,
+                "java/lang/Long",
+                "valueOf",
+                "(J)Ljava/lang/Long;",
+                false));
+        out.add(new VarInsnNode(Opcodes.ALOAD, workspace.value));
+        out.add(new MethodInsnNode(
+                Opcodes.INVOKEINTERFACE,
+                "java/util/concurrent/ConcurrentMap",
+                "putIfAbsent",
+                "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;",
+                true));
+        out.add(new JumpInsnNode(Opcodes.IFNULL, unique));
+        out.add(new JumpInsnNode(Opcodes.GOTO, generate));
+        out.add(unique);
+        out.add(new VarInsnNode(Opcodes.ALOAD, workspace.record));
+        pushInt(out, 1);
+        out.add(new VarInsnNode(Opcodes.LLOAD, workspace.token));
+        emitMask(out, binding, workspace.nonce);
+        out.add(new InsnNode(Opcodes.LXOR));
+        out.add(new MethodInsnNode(
+                Opcodes.INVOKESTATIC,
+                "java/lang/Long",
+                "valueOf",
+                "(J)Ljava/lang/Long;",
+                false));
+        out.add(new InsnNode(Opcodes.AASTORE));
+        if (storage.usesWeakIdentity())
+        {
+            emitCleanupTokenWrite(out, storage, workspace);
+        }
+        out.add(new JumpInsnNode(Opcodes.GOTO, done));
+        if (storage.usesWeakIdentity())
+        {
+            out.add(isOwner);
+            out.add(new VarInsnNode(Opcodes.ALOAD, workspace.record));
+            pushInt(out, 1);
+            emitMask(out, binding, workspace.nonce);
+            out.add(new MethodInsnNode(
+                    Opcodes.INVOKESTATIC,
+                    "java/lang/Long",
+                    "valueOf",
+                    "(J)Ljava/lang/Long;",
+                    false));
+            out.add(new InsnNode(Opcodes.AASTORE));
+            emitNullCleanupToken(out, workspace);
+            out.add(new JumpInsnNode(Opcodes.GOTO, done));
+        }
+        out.add(isNull);
+        out.add(new VarInsnNode(Opcodes.ALOAD, workspace.record));
+        pushInt(out, 1);
+        out.add(new InsnNode(Opcodes.ACONST_NULL));
+        out.add(new InsnNode(Opcodes.AASTORE));
+        if (storage.usesWeakIdentity())
+        {
+            emitNullCleanupToken(out, workspace);
+        }
+        out.add(done);
+    }
+
+    private static void emitCleanupTokenWrite(
+            InsnList out,
+            InlineFieldRuntimeGenerator.Storage storage,
+            Workspace workspace)
+    {
+        WeakIdentitySupportGenerator.CleanupCipher cipher = storage.cleanupCipher();
+        out.add(new VarInsnNode(Opcodes.ALOAD, workspace.record));
+        pushInt(out, 2);
+        out.add(new VarInsnNode(Opcodes.LLOAD, workspace.token));
+        out.add(new LdcInsnNode(cipher.key()));
+        out.add(new InsnNode(Opcodes.LXOR));
+        pushInt(out, cipher.rotation());
+        out.add(new MethodInsnNode(
+                Opcodes.INVOKESTATIC,
+                "java/lang/Long",
+                "rotateLeft",
+                "(JI)J",
+                false));
+        out.add(new LdcInsnNode(cipher.multiplier()));
+        out.add(new InsnNode(Opcodes.LMUL));
+        out.add(new LdcInsnNode(cipher.addend()));
+        out.add(new InsnNode(Opcodes.LADD));
+        out.add(new MethodInsnNode(
+                Opcodes.INVOKESTATIC,
+                "java/lang/Long",
+                "valueOf",
+                "(J)Ljava/lang/Long;",
+                false));
+        out.add(new InsnNode(Opcodes.AASTORE));
+    }
+
+    private static void emitNullCleanupToken(InsnList out, Workspace workspace)
+    {
+        out.add(new VarInsnNode(Opcodes.ALOAD, workspace.record));
+        pushInt(out, 2);
+        out.add(new InsnNode(Opcodes.ACONST_NULL));
+        out.add(new InsnNode(Opcodes.AASTORE));
     }
 
     private static void emitStringWrite(
@@ -492,15 +869,16 @@ public final class InlineFieldTransformer
     {
         if (instance)
         {
+            emitDrainWeakStorage(out, storage);
             out.add(new FieldInsnNode(
                     Opcodes.GETSTATIC,
                     storage.owner(),
                     storage.name(),
                     storage.descriptor()));
-            out.add(new VarInsnNode(Opcodes.ALOAD, workspace.owner));
+            emitWeakIdentityKey(out, storage, workspace, false);
             out.add(new MethodInsnNode(
                     Opcodes.INVOKEINTERFACE,
-                    "java/util/Map",
+                    "java/util/concurrent/ConcurrentMap",
                     "get",
                     "(Ljava/lang/Object;)Ljava/lang/Object;",
                     true));
@@ -534,9 +912,13 @@ public final class InlineFieldTransformer
                 "()J",
                 false));
         out.add(new VarInsnNode(Opcodes.LSTORE, workspace.nonce));
-        if (type.getSort() == Type.OBJECT)
+        if (isString(type))
         {
             emitStringRead(out, binding, workspace);
+        }
+        else if (storage.storesReference())
+        {
+            emitReferenceRead(out, storage, binding, type, workspace);
         }
         else
         {
@@ -554,6 +936,68 @@ public final class InlineFieldTransformer
             out.add(new InsnNode(Opcodes.LXOR));
             emitPrimitiveValue(out, type);
         }
+        out.add(done);
+    }
+
+    private static void emitReferenceRead(
+            InsnList out,
+            InlineFieldRuntimeGenerator.Storage storage,
+            EncryptionBinding binding,
+            Type type,
+            Workspace workspace)
+    {
+        LabelNode hasToken = new LabelNode();
+        LabelNode resolveToken = new LabelNode();
+        LabelNode done = new LabelNode();
+        out.add(new VarInsnNode(Opcodes.ALOAD, workspace.record));
+        pushInt(out, 1);
+        out.add(new InsnNode(Opcodes.AALOAD));
+        out.add(new InsnNode(Opcodes.DUP));
+        out.add(new JumpInsnNode(Opcodes.IFNONNULL, hasToken));
+        out.add(new InsnNode(Opcodes.POP));
+        out.add(new InsnNode(Opcodes.ACONST_NULL));
+        out.add(new JumpInsnNode(Opcodes.GOTO, done));
+        out.add(hasToken);
+        out.add(new TypeInsnNode(Opcodes.CHECKCAST, "java/lang/Long"));
+        out.add(new MethodInsnNode(
+                Opcodes.INVOKEVIRTUAL,
+                "java/lang/Long",
+                "longValue",
+                "()J",
+                false));
+        emitMask(out, binding, workspace.nonce);
+        out.add(new InsnNode(Opcodes.LXOR));
+        if (storage.usesWeakIdentity())
+        {
+            out.add(new InsnNode(Opcodes.DUP2));
+            out.add(new InsnNode(Opcodes.LCONST_0));
+            out.add(new InsnNode(Opcodes.LCMP));
+            out.add(new JumpInsnNode(Opcodes.IFNE, resolveToken));
+            out.add(new InsnNode(Opcodes.POP2));
+            out.add(new VarInsnNode(Opcodes.ALOAD, workspace.owner));
+            out.add(new TypeInsnNode(Opcodes.CHECKCAST, type.getInternalName()));
+            out.add(new JumpInsnNode(Opcodes.GOTO, done));
+            out.add(resolveToken);
+        }
+        out.add(new MethodInsnNode(
+                Opcodes.INVOKESTATIC,
+                "java/lang/Long",
+                "valueOf",
+                "(J)Ljava/lang/Long;",
+                false));
+        out.add(new FieldInsnNode(
+                Opcodes.GETSTATIC,
+                storage.owner(),
+                storage.referenceVaultName(),
+                "Ljava/util/concurrent/ConcurrentMap;"));
+        out.add(new InsnNode(Opcodes.SWAP));
+        out.add(new MethodInsnNode(
+                Opcodes.INVOKEINTERFACE,
+                "java/util/concurrent/ConcurrentMap",
+                "get",
+                "(Ljava/lang/Object;)Ljava/lang/Object;",
+                true));
+        out.add(new TypeInsnNode(Opcodes.CHECKCAST, type.getInternalName()));
         out.add(done);
     }
 
@@ -685,7 +1129,7 @@ public final class InlineFieldTransformer
             case Type.LONG -> out.add(new InsnNode(Opcodes.LCONST_0));
             case Type.FLOAT -> out.add(new InsnNode(Opcodes.FCONST_0));
             case Type.DOUBLE -> out.add(new InsnNode(Opcodes.DCONST_0));
-            case Type.OBJECT -> out.add(new InsnNode(Opcodes.ACONST_NULL));
+            case Type.OBJECT, Type.ARRAY -> out.add(new InsnNode(Opcodes.ACONST_NULL));
             default -> throw new IllegalArgumentException("Unsupported inline field type: " + type);
         }
     }
@@ -767,8 +1211,19 @@ public final class InlineFieldTransformer
 
     private static boolean supported(String descriptor)
     {
-        return descriptor.length() == 1 && "ZBCSIJFD".indexOf(descriptor.charAt(0)) >= 0 ||
-               "Ljava/lang/String;".equals(descriptor);
+        int sort = Type.getType(descriptor).getSort();
+        return sort != Type.VOID && sort != Type.METHOD;
+    }
+
+    private static boolean isString(Type type)
+    {
+        return type.getSort() == Type.OBJECT && "java/lang/String".equals(type.getInternalName());
+    }
+
+    private static boolean isIndirectReference(Type type)
+    {
+        return type.getSort() == Type.ARRAY ||
+               type.getSort() == Type.OBJECT && !isString(type);
     }
 
     private static void pushInt(InsnList out, int value)
@@ -821,6 +1276,8 @@ public final class InlineFieldTransformer
         private final int encrypted;
         private final int decoded;
         private final int index;
+        private final int previousRecord;
+        private final int token;
         private final int limit;
 
         private Workspace(int base)
@@ -833,11 +1290,13 @@ public final class InlineFieldTransformer
             encrypted = base + 7;
             decoded = base + 8;
             index = base + 9;
-            limit = base + 10;
+            previousRecord = base + 10;
+            token = base + 11;
+            limit = base + 13;
         }
     }
 
-    public record Result(ClassNode runtimeClass, int fields, int accesses, int skipped)
+    public record Result(List<ClassNode> runtimeClasses, int fields, int accesses, int skipped)
     {
     }
 }
