@@ -439,9 +439,12 @@ constant method handles are skipped. Fields used through recognizable constant-n
 serialization/externalization, or clone-compatible object layouts are also retained automatically.
 `includeReferencedMethods` automatically
 adds eligible field accessors and callers to the protection plan; explicit exclusions still prevent field
-removal when a required method cannot safely be protected. Constructor accesses remain ordinary JVM
-bytecode, while `<clinit>` keys are hidden only when that initializer is selected for virtualization; neither
-should be the only access path relied on to protect a sensitive member.
+removal when a required method cannot safely be protected. Field reads and writes inside constructors are
+redirected through private synthetic helpers after `this` has been initialized. Those helpers are always
+assigned to the configured VM, so field storage keys and cipher bytecode are not exposed in the constructor.
+Pre-super writes remain untouched and make the field ineligible because the JVM verifier does not allow an
+uninitialized `this` reference to be passed into a helper. `<clinit>` keys are hidden only when that initializer
+is selected for virtualization.
 
 ## Watermarks
 

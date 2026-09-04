@@ -2,6 +2,7 @@ package nhcm.bytecodevm.generator.editor.inlining;
 
 import nhcm.bytecodevm.config.BytecodeVMConfig;
 import nhcm.bytecodevm.config.sdk.SdkAnnotationReader;
+import nhcm.bytecodevm.generator.GeneratedMemberNamer;
 import nhcm.bytecodevm.utils.RandomUtils;
 import org.objectweb.asm.ConstantDynamic;
 import org.objectweb.asm.Handle;
@@ -45,24 +46,28 @@ public final class InlineFieldTransformer
     private final InlineFieldRuntimeGenerator.GeneratedRuntime runtime;
     private final InlineFieldCompatibility compatibility;
     private final ClassHierarchyResolver hierarchy;
+    private final GeneratedMemberNamer namer;
     private final Map<FieldId, Candidate> candidates = new LinkedHashMap<>();
     private final Map<FieldId, List<Access>> accesses = new LinkedHashMap<>();
     private final Set<FieldId> handleReferences = new LinkedHashSet<>();
     private final Set<FieldId> preInitializationReferences = new LinkedHashSet<>();
     private final Map<MethodNode, Workspace> workspaces = new IdentityHashMap<>();
+    private final Map<ConstructorHelperKey, ConstructorHelper> constructorHelpers = new LinkedHashMap<>();
     private int unsupportedCandidates;
 
     public InlineFieldTransformer(
             BytecodeVMConfig config,
             Collection<ClassNode> classes,
             InlineFieldRuntimeGenerator.GeneratedRuntime runtime,
-            InlineFieldCompatibility compatibility)
+            InlineFieldCompatibility compatibility,
+            GeneratedMemberNamer namer)
     {
         this.config = config;
         this.classes = classes;
         this.runtime = runtime;
         this.compatibility = compatibility;
         this.hierarchy = new ClassHierarchyResolver(classes);
+        this.namer = namer;
         collectCandidates();
         collectAccesses();
     }
@@ -137,7 +142,12 @@ public final class InlineFieldTransformer
         }
 
         List<ClassNode> runtimeClasses = inlined == 0 ? List.of() : runtime.generatedClasses();
-        return new Result(runtimeClasses, inlined, rewritten, skipped);
+        return new Result(
+                runtimeClasses,
+                List.copyOf(constructorHelpers.values()),
+                inlined,
+                rewritten,
+                skipped);
     }
 
     private void collectCandidates()
@@ -332,6 +342,12 @@ public final class InlineFieldTransformer
             EncryptionBinding binding,
             Type type)
     {
+        if ("<init>".equals(access.method.name))
+        {
+            rewriteConstructorAccess(access, storage, binding, type);
+            return;
+        }
+
         FieldInsnNode field = access.instruction;
         Workspace workspace = workspace(access.method);
         InsnList replacement = new InsnList();
@@ -366,6 +382,99 @@ public final class InlineFieldTransformer
         access.method.instructions.insertBefore(field, replacement);
         access.method.instructions.remove(field);
         access.method.maxStack = Math.max(access.method.maxStack + 12, 24);
+    }
+
+    private void rewriteConstructorAccess(
+            Access access,
+            InlineFieldRuntimeGenerator.Storage storage,
+            EncryptionBinding binding,
+            Type type)
+    {
+        ConstructorHelperKey key = new ConstructorHelperKey(
+                access.owner.name,
+                storage.name(),
+                storage.fieldSlot(),
+                access.instruction.getOpcode());
+        ConstructorHelper helper = constructorHelpers.get(key);
+        if (helper == null)
+        {
+            helper = createConstructorHelper(access, storage, binding, type);
+            constructorHelpers.put(key, helper);
+        }
+
+        access.method.instructions.set(access.instruction, new MethodInsnNode(
+                Opcodes.INVOKESTATIC,
+                helper.owner.name,
+                helper.method.name,
+                helper.method.desc,
+                false));
+    }
+
+    private ConstructorHelper createConstructorHelper(
+            Access access,
+            InlineFieldRuntimeGenerator.Storage storage,
+            EncryptionBinding binding,
+            Type type)
+    {
+        int opcode = access.instruction.getOpcode();
+        Type objectType = Type.getObjectType("java/lang/Object");
+        String descriptor = switch (opcode)
+        {
+            case Opcodes.GETFIELD -> Type.getMethodDescriptor(type, objectType);
+            case Opcodes.PUTFIELD -> Type.getMethodDescriptor(Type.VOID_TYPE, objectType, type);
+            case Opcodes.GETSTATIC -> Type.getMethodDescriptor(type);
+            case Opcodes.PUTSTATIC -> Type.getMethodDescriptor(Type.VOID_TYPE, type);
+            default -> throw new IllegalStateException("Unknown constructor field opcode: " + opcode);
+        };
+        String name = constructorHelperName(access.owner, descriptor);
+        MethodNode helper = new MethodNode(
+                Opcodes.ACC_PRIVATE | Opcodes.ACC_STATIC | Opcodes.ACC_SYNTHETIC,
+                name,
+                descriptor,
+                null,
+                null);
+
+        int valueLocal = opcode == Opcodes.PUTFIELD ? 1 : 0;
+        if (opcode == Opcodes.GETFIELD || opcode == Opcodes.PUTFIELD)
+        {
+            helper.instructions.add(new VarInsnNode(Opcodes.ALOAD, 0));
+        }
+        if (opcode == Opcodes.PUTFIELD || opcode == Opcodes.PUTSTATIC)
+        {
+            helper.instructions.add(new VarInsnNode(type.getOpcode(Opcodes.ILOAD), valueLocal));
+        }
+        FieldInsnNode field = new FieldInsnNode(
+                opcode,
+                access.instruction.owner,
+                access.instruction.name,
+                access.instruction.desc);
+        helper.instructions.add(field);
+        helper.instructions.add(new InsnNode(
+                opcode == Opcodes.GETFIELD || opcode == Opcodes.GETSTATIC
+                        ? type.getOpcode(Opcodes.IRETURN)
+                        : Opcodes.RETURN));
+        helper.maxLocals = (Type.getArgumentsAndReturnSizes(descriptor) >> 2) - 1;
+        helper.maxStack = Math.max(2, type.getSize() + 1);
+        access.owner.methods.add(helper);
+
+        rewrite(new Access(access.owner, helper, field), storage, binding, type);
+        return new ConstructorHelper(access.owner, helper);
+    }
+
+    private String constructorHelperName(ClassNode owner, String descriptor)
+    {
+        int attempt = constructorHelpers.size();
+        while (true)
+        {
+            String semanticName = "$vm$constructorField$" + attempt++;
+            String candidate = namer.method(owner.name, semanticName, descriptor);
+            boolean occupied = owner.methods.stream().anyMatch(method ->
+                    method.name.equals(candidate) && method.desc.equals(descriptor));
+            if (!occupied)
+            {
+                return candidate;
+            }
+        }
     }
 
     private static void emitInitializeOwner(
@@ -1249,6 +1358,10 @@ public final class InlineFieldTransformer
     {
     }
 
+    private record ConstructorHelperKey(String owner, String storageName, int fieldSlot, int opcode)
+    {
+    }
+
     private record EncryptionBinding(long key, long multiplier, long addend, int rotation)
     {
         private static EncryptionBinding random()
@@ -1296,7 +1409,16 @@ public final class InlineFieldTransformer
         }
     }
 
-    public record Result(List<ClassNode> runtimeClasses, int fields, int accesses, int skipped)
+    public record ConstructorHelper(ClassNode owner, MethodNode method)
+    {
+    }
+
+    public record Result(
+            List<ClassNode> runtimeClasses,
+            List<ConstructorHelper> constructorHelpers,
+            int fields,
+            int accesses,
+            int skipped)
     {
     }
 }

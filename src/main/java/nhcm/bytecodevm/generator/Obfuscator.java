@@ -354,7 +354,8 @@ public class Obfuscator
                 config,
                 context.classes.values(),
                 fieldRuntime,
-                fieldCompatibility);
+                fieldCompatibility,
+                namer);
         Set<MethodNode> fieldReferencedMethods = config.includeReferencedMethods
                 ? fieldTransformer.referencedMethods()
                 : Set.of();
@@ -363,7 +364,7 @@ public class Obfuscator
         String globalLocation = "BytecodeVM";
 
         Map<GeneratorProfile, List<VMSetGenerator>> allInOneVms = new LinkedHashMap<>();
-        List<VMSetGenerator> perClasses = new ArrayList<>();
+        Map<String, Map<GeneratorProfile, List<VMSetGenerator>>> perClassVms = new LinkedHashMap<>();
         List<VMSetGenerator> perMethods = new ArrayList<>();
         Map<String, Map<GeneratorProfile, List<VMSetGenerator>>> perPackage = new LinkedHashMap<>();
         Map<GeneratorGroupKey, Integer> generatorOrdinals = new HashMap<>();
@@ -394,16 +395,6 @@ public class Obfuscator
 
         for(ClassNode classNode : context.classes.values())
         {
-            String classPackage = ClassUtils.getPackageName(classNode);
-            String vmLocation = getVMLocation(globalLocation, classPackage, classNode);
-
-            Map<GeneratorProfile, List<VMSetGenerator>> perClass = null;
-
-            if(config.createMode == BytecodeVMConfig.VMCreateMode.PER_CLASS)
-            {
-                perClass = new LinkedHashMap<>();
-            }
-
             for(MethodNode methodNode : classNode.methods)
             {
                 MethodCandidate candidate = candidateById.get(MethodId.of(classNode, methodNode));
@@ -433,71 +424,16 @@ public class Obfuscator
 
                 matchedMethods++;
                 protectedMethods.add(methodNode);
-                GeneratorProfile profile = GeneratorProfile.of(candidate.methodConfig);
-
-                VMSetGenerator assignedGenerator = null;
-                switch(config.createMode)
-                {
-                    case PER_CLASS ->
-                    {
-                        List<VMSetGenerator> generators = perClass.computeIfAbsent(
-                                profile,
-                                ignored -> newVMSetGenerators(
-                                        profileName(ClassUtils.getSimpleName(classNode) + "$VM", vmLocation),
-                                        vmLocation,
-                                        profile.apply(config)));
-                        GeneratorGroupKey key = new GeneratorGroupKey(classNode.name, profile);
-                        int ordinal = generatorOrdinals.merge(key, 1, Integer::sum) - 1;
-                        assignedGenerator = pickGenerator(generators, ordinal);
-                        assignedGenerator.addMethod(methodNode, classNode);
-                    }
-
-                    case PER_METHOD ->
-                    {
-                        VMSetGenerator perMethod = newVMSetGenerator(
-                                ClassUtils.getSimpleName(classNode) + "$" + methodNode.name + "$VM",
-                                vmLocation,
-                                profile.apply(config)
-                        );
-
-                        perMethod.addMethod(methodNode, classNode);
-                        perMethods.add(perMethod);
-                        assignedGenerator = perMethod;
-                    }
-
-                    case PER_PACKAGE ->
-                    {
-                        Map<GeneratorProfile, List<VMSetGenerator>> packageProfiles =
-                                perPackage.computeIfAbsent(classPackage, ignored -> new LinkedHashMap<>());
-                        List<VMSetGenerator> generators = packageProfiles.computeIfAbsent(
-                                profile,
-                                ignored -> newVMSetGenerators(
-                                        profileName(classPackage + "$VM", classPackage),
-                                        classPackage,
-                                        profile.apply(config)));
-                        GeneratorGroupKey key = new GeneratorGroupKey(classPackage, profile);
-                        int ordinal = generatorOrdinals.merge(key, 1, Integer::sum) - 1;
-                        assignedGenerator = pickGenerator(generators, ordinal);
-                        assignedGenerator.addMethod(methodNode, classNode);
-                    }
-
-                    case ONE_FOR_ALL ->
-                    {
-                        List<VMSetGenerator> generators = allInOneVms.computeIfAbsent(
-                                profile,
-                                ignored -> newVMSetGenerators(
-                                        profileName("BytecodeVM", "BytecodeVM"),
-                                        "BytecodeVM",
-                                        profile.apply(config)));
-                        GeneratorGroupKey key = new GeneratorGroupKey("", profile);
-                        int ordinal = generatorOrdinals.merge(key, 1, Integer::sum) - 1;
-                        assignedGenerator = pickGenerator(generators, ordinal);
-                        assignedGenerator.addMethod(methodNode, classNode);
-                    }
-                }
-                assignedGenerator = Objects.requireNonNull(
-                        assignedGenerator,
-                        "VM generator assignment");
+                VMSetGenerator assignedGenerator = assignMethodToVM(
+                        classNode,
+                        methodNode,
+                        candidate.methodConfig,
+                        globalLocation,
+                        allInOneVms,
+                        perClassVms,
+                        perMethods,
+                        perPackage,
+                        generatorOrdinals);
                 methodAssignments.put(methodNode, assignedGenerator);
                 plannedMethods.add(new ObfuscationReport.MethodPlan(
                         candidate.id.owner,
@@ -511,26 +447,38 @@ public class Obfuscator
                         assignedGenerator.vmClassName,
                         assignedGenerator.vmStructure.name()));
             }
+        }
 
-            if(config.createMode == BytecodeVMConfig.VMCreateMode.PER_CLASS && perClass != null)
-            {
-                perClass.values().forEach(generators -> addNonEmpty(perClasses, generators));
-            }
+        inlineFieldResult = fieldTransformer.transform(protectedMethods);
+        for (InlineFieldTransformer.ConstructorHelper helper : inlineFieldResult.constructorHelpers())
+        {
+            protectedMethods.add(helper.method());
+            BytecodeVMConfig helperConfig = config.forMethod(helper.owner(), helper.method());
+            VMSetGenerator assignedGenerator = assignMethodToVM(
+                    helper.owner(),
+                    helper.method(),
+                    helperConfig,
+                    globalLocation,
+                    allInOneVms,
+                    perClassVms,
+                    perMethods,
+                    perPackage,
+                    generatorOrdinals);
+            methodAssignments.put(helper.method(), assignedGenerator);
         }
 
         switch(config.createMode)
         {
-            case PER_CLASS -> VMSetGenerators.addAll(perClasses);
+            case PER_CLASS -> perClassVms.values().forEach(profiles ->
+                    profiles.values().forEach(generators -> addNonEmpty(VMSetGenerators, generators)));
             case PER_METHOD -> VMSetGenerators.addAll(perMethods);
             case PER_PACKAGE -> perPackage.values().forEach(profiles ->
                     profiles.values().forEach(generators -> addNonEmpty(VMSetGenerators, generators)));
             case ONE_FOR_ALL ->
-            {
-                allInOneVms.values().forEach(generators -> addNonEmpty(VMSetGenerators, generators));
-            }
+                    allInOneVms.values().forEach(generators ->
+                            addNonEmpty(VMSetGenerators, generators));
         }
 
-        inlineFieldResult = fieldTransformer.transform(protectedMethods);
         if (!inlineFieldResult.runtimeClasses().isEmpty())
         {
             inlineFieldResult.runtimeClasses().forEach(context::addClass);
@@ -538,6 +486,11 @@ public class Obfuscator
                     "Inlined " + LogColors.strong(inlineFieldResult.fields()) +
                             " field(s) and rewrote " + LogColors.strong(inlineFieldResult.accesses()) +
                             " access site(s)" +
+                            (inlineFieldResult.constructorHelpers().isEmpty()
+                                    ? ""
+                                    : " through " +
+                                      LogColors.strong(inlineFieldResult.constructorHelpers().size()) +
+                                      " virtualized constructor helper(s)") +
                             (inlineFieldResult.skipped() == 0
                                     ? ""
                                     : " (skipped " + LogColors.strong(inlineFieldResult.skipped()) +
@@ -761,6 +714,77 @@ public class Obfuscator
             generators.add(newVMSetGenerator(vmName, location, generatorConfig));
         }
         return generators;
+    }
+
+    private VMSetGenerator assignMethodToVM(
+            ClassNode owner,
+            MethodNode method,
+            BytecodeVMConfig methodConfig,
+            String globalLocation,
+            Map<GeneratorProfile, List<VMSetGenerator>> allInOneVms,
+            Map<String, Map<GeneratorProfile, List<VMSetGenerator>>> perClassVms,
+            List<VMSetGenerator> perMethods,
+            Map<String, Map<GeneratorProfile, List<VMSetGenerator>>> perPackage,
+            Map<GeneratorGroupKey, Integer> generatorOrdinals)
+    {
+        String classPackage = ClassUtils.getPackageName(owner);
+        String vmLocation = getVMLocation(globalLocation, classPackage, owner);
+        GeneratorProfile profile = GeneratorProfile.of(methodConfig);
+        VMSetGenerator assignedGenerator;
+        switch(config.createMode)
+        {
+            case PER_CLASS ->
+            {
+                Map<GeneratorProfile, List<VMSetGenerator>> classProfiles =
+                        perClassVms.computeIfAbsent(owner.name, ignored -> new LinkedHashMap<>());
+                List<VMSetGenerator> generators = classProfiles.computeIfAbsent(
+                        profile,
+                        ignored -> newVMSetGenerators(
+                                profileName(ClassUtils.getSimpleName(owner) + "$VM", vmLocation),
+                                vmLocation,
+                                profile.apply(config)));
+                GeneratorGroupKey key = new GeneratorGroupKey(owner.name, profile);
+                int ordinal = generatorOrdinals.merge(key, 1, Integer::sum) - 1;
+                assignedGenerator = pickGenerator(generators, ordinal);
+            }
+            case PER_METHOD ->
+            {
+                assignedGenerator = newVMSetGenerator(
+                        ClassUtils.getSimpleName(owner) + "$" + method.name + "$VM",
+                        vmLocation,
+                        profile.apply(config));
+                perMethods.add(assignedGenerator);
+            }
+            case PER_PACKAGE ->
+            {
+                Map<GeneratorProfile, List<VMSetGenerator>> packageProfiles =
+                        perPackage.computeIfAbsent(classPackage, ignored -> new LinkedHashMap<>());
+                List<VMSetGenerator> generators = packageProfiles.computeIfAbsent(
+                        profile,
+                        ignored -> newVMSetGenerators(
+                                profileName(classPackage + "$VM", classPackage),
+                                classPackage,
+                                profile.apply(config)));
+                GeneratorGroupKey key = new GeneratorGroupKey(classPackage, profile);
+                int ordinal = generatorOrdinals.merge(key, 1, Integer::sum) - 1;
+                assignedGenerator = pickGenerator(generators, ordinal);
+            }
+            case ONE_FOR_ALL ->
+            {
+                List<VMSetGenerator> generators = allInOneVms.computeIfAbsent(
+                        profile,
+                        ignored -> newVMSetGenerators(
+                                profileName("BytecodeVM", "BytecodeVM"),
+                                "BytecodeVM",
+                                profile.apply(config)));
+                GeneratorGroupKey key = new GeneratorGroupKey("", profile);
+                int ordinal = generatorOrdinals.merge(key, 1, Integer::sum) - 1;
+                assignedGenerator = pickGenerator(generators, ordinal);
+            }
+            default -> throw new IllegalStateException("Unknown VM create mode: " + config.createMode);
+        }
+        assignedGenerator.addMethod(method, owner);
+        return assignedGenerator;
     }
 
     private static VMSetGenerator pickGenerator(List<VMSetGenerator> generators, int ordinal)
