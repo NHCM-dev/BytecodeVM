@@ -79,6 +79,9 @@ public class BytecodeVM
             inlineFields: true
             inlineCalledProtectedMethods: true
             inlineStaticFinals: true
+            # Keeps the mandatory super()/this() prefix in <init>, then moves the complete
+            # initialized-this constructor body into a private method that is always virtualized.
+            virtualizeConstructors: true
             # When enabled, unsafe transforms require @InlineField, @InlineFinal,
             # or a method-level @Virtualize annotation. Disabled by default for maximum coverage.
             annotationOnly: false
@@ -128,10 +131,10 @@ public class BytecodeVM
               all:
                 - "*"
                 - "* *(*)*"
+                - "* <init>(*)V"
                 - "* <clinit>()V"
             exclusions:
-              all:
-                - "* <init>(*)V"
+              all: []
             """;
 
     private static final String asciiArt = """

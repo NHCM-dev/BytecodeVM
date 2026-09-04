@@ -12,13 +12,13 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Selects a class or method for bytecode virtualization.
+ * Selects a class, constructor, or method for bytecode virtualization.
  * Values left at {@code CONFIG} are resolved from an enclosing annotation
  * and then from the obfuscator YAML configuration.
  */
 @Documented
 @Retention(RetentionPolicy.CLASS)
-@Target({ElementType.TYPE, ElementType.METHOD})
+@Target({ElementType.TYPE, ElementType.METHOD, ElementType.CONSTRUCTOR})
 public @interface Virtualize
 {
     /** Controls whether this target is virtualized. */

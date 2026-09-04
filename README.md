@@ -186,6 +186,7 @@ preEncryptNumbers: true
 inlineFields: true
 inlineCalledProtectedMethods: true
 inlineStaticFinals: true
+virtualizeConstructors: true
 annotationOnly: false
 privateFieldOnly: false
 ignorePublicCalls: false
@@ -216,7 +217,7 @@ obfuscateInterpretBranch: true
 interpretBranchCases: 3
 
 includes:
-  all: ["*", "* *(*)*"]
+  all: ["*", "* *(*)*", "* <init>(*)V"]
   protectCodePool: ["* @Sensitive *(*)*"]
   dynamicConstantDecrypt: ["* @Sensitive *(*)*"]
   encryptOperands: ["com.example.secure.* *(*)*"]
@@ -230,7 +231,7 @@ includes:
   inlineCalledProtectedMethods: ["com.example.secure.*, verify, boolean(java.lang.String)"]
   superInstruction: ["com.example.hot.* *(*)*"]
 exclusions:
-  all: ["* <init>(*)V"]
+  all: []
   dynamicStateKey: ["* fastPath(*)*"]
 ```
 
@@ -266,6 +267,7 @@ Every field is optional. Omitted fields inherit from the canonical `BytecodeVM.d
 | `inlineFields` | `true`, `false` | `true` | Removes selected fields of any JVM type. Primitive and String values are encrypted directly; object and array references use encrypted randomized handles. Storage and crypto bytecode are expanded at each original field instruction. |
 | `inlineCalledProtectedMethods` | `true`, `false` | `true` | Uses the protected method's original owner, name, and descriptor as its direct VM entry. No shared `MethodEntries` bridge class is generated. |
 | `inlineStaticFinals` | `true`, `false` | `true` | Applies direct access-site encryption and storage to selected static-final fields of any JVM type. |
+| `virtualizeConstructors` | `true`, `false` | `true` | Keeps the required `super()`/`this()` prefix and virtualizes the complete initialized-this constructor continuation. Unsafe constructor shapes are skipped automatically. |
 | `annotationOnly` | `true`, `false` | `false` | Restricts unsafe transforms to `@InlineField`, `@InlineFinal`, and method-level `@Virtualize` targets when enabled. The maximum-coverage default lets config match groups select them globally. |
 | `privateFieldOnly` | `true`, `false` | `false` | Limits config-selected field inlining to private fields when enabled. An explicit SDK field annotation is treated as an intentional override. |
 | `ignorePublicCalls` | `true`, `false` | `false` | Limits unsafe original-slot VM entry selection to private methods when enabled. The default also handles package, protected, and public call sites. |
@@ -349,7 +351,7 @@ public final class LicenseService {
 }
 ```
 
-Every SDK option using `CONFIG` inherits its value from the enclosing class annotation and then YAML. Explicit class or method SDK values override YAML, and method values override class values. `@Virtualize.preEncryptStrings` and `preEncryptNumbers` default to `ENABLED`; set either to `Toggle.DISABLED` for a target that should retain its original constants. A structure override is assigned to a compatible VM set, so it does not silently retain an incompatible global VM structure. `inspect` and `protect` emit a warning when an SDK structure falls outside the configured automatic tier.
+Every SDK option using `CONFIG` inherits its value from the enclosing class annotation and then YAML. Explicit class, constructor, or method SDK values override YAML, and member values override class values. `@Virtualize.preEncryptStrings` and `preEncryptNumbers` default to `ENABLED`; set either to `Toggle.DISABLED` for a target that should retain its original constants. A structure override is assigned to a compatible VM set, so it does not silently retain an incompatible global VM structure. `inspect` and `protect` emit a warning when an SDK structure falls outside the configured automatic tier.
 
 `VMOptions` groups the low-level YAML switches into three practical controls. `encrypt` controls virtual addresses, operands, per-method opcode maps, dynamic constant decryption, constant binding, and dynamic state keys. `shuffle` controls constants, split streams, instruction blocks, and virtual-CFG layout. `obfuscate` controls dispatch obfuscation and dynamic CodePool construction. Explicitly enabling any group also enables `protectCodePool`; disabling one group leaves the other groups unchanged. Fine-grained tuning remains available in YAML.
 
@@ -425,6 +427,16 @@ private int attempts;
 private static final String LICENSE_SALT = "example";
 ```
 
+`virtualizeConstructors` analyzes each selected `<init>` and identifies the call that initializes `this`.
+The required prefix remains ordinary JVM bytecode, while the complete continuation after `super()` or
+`this()` is moved into a private synthetic method and assigned to the configured VM. Live local values are
+passed as compact helper parameters and restored to their original slot layout inside the continuation.
+Constructors with multiple initialization branches, a non-empty
+split stack, control flow or exception regions crossing the split, unsupported live locals, stack-trace
+introspection, record/enum semantics, or SecurityManager inheritance are retained unchanged. A constructor-
+level `@Virtualize` annotation can explicitly enable this behavior when global constructor virtualization is
+disabled.
+
 `inlineCalledProtectedMethods` does not generate a shared `MethodEntries` class. The existing replacement
 stage writes the VM execute stub directly into the protected method's original owner/name/descriptor slot,
 so existing calls, recursive calls, method handles, and cross-class callers continue through the same
@@ -439,12 +451,12 @@ constant method handles are skipped. Fields used through recognizable constant-n
 serialization/externalization, or clone-compatible object layouts are also retained automatically.
 `includeReferencedMethods` automatically
 adds eligible field accessors and callers to the protection plan; explicit exclusions still prevent field
-removal when a required method cannot safely be protected. Field reads and writes inside constructors are
-redirected through private synthetic helpers after `this` has been initialized. Those helpers are always
-assigned to the configured VM, so field storage keys and cipher bytecode are not exposed in the constructor.
-Pre-super writes remain untouched and make the field ineligible because the JVM verifier does not allow an
-uninitialized `this` reference to be passed into a helper. `<clinit>` keys are hidden only when that initializer
-is selected for virtualization.
+removal when a required method cannot safely be protected. Constructor continuations normally move all
+post-initialization field work into one virtualized body. When a constructor cannot be split safely, individual
+inlined field accesses still use virtualized fallback helpers after `this` has been initialized. Pre-super
+writes remain untouched and make the field ineligible because the JVM verifier does not allow an uninitialized
+`this` reference to be passed into a helper. `<clinit>` keys are hidden only when that initializer is selected
+for virtualization.
 
 ## Watermarks
 
@@ -582,7 +594,7 @@ exclusions:
 
 Supported boolean group names are:
 
-`protectCodePool`, `dynamicConstantDecrypt`, `virtualizeInstructionAddresses`, `encryptOperands`, `perMethodOpcodeMap`, `shuffleConstants`, `bindConstantsToOperands`, `splitCodeStreams`, `shuffleInstructionBlocks`, `obfuscateDispatch`, `dynamicCodePoolBuild`, `dynamicStateKey`, `virtualControlFlowGraph`, `constantFix`, `preEncryptStrings`, `preEncryptNumbers`, `inlineFields`, `inlineStaticFinals`, `inlineCalledProtectedMethods`, `superInstruction`, and `obfuscateInterpretBranch`.
+`protectCodePool`, `dynamicConstantDecrypt`, `virtualizeInstructionAddresses`, `encryptOperands`, `perMethodOpcodeMap`, `shuffleConstants`, `bindConstantsToOperands`, `splitCodeStreams`, `shuffleInstructionBlocks`, `obfuscateDispatch`, `dynamicCodePoolBuild`, `dynamicStateKey`, `virtualControlFlowGraph`, `constantFix`, `preEncryptStrings`, `preEncryptNumbers`, `inlineFields`, `inlineStaticFinals`, `inlineCalledProtectedMethods`, `virtualizeConstructors`, `superInstruction`, and `obfuscateInterpretBranch`.
 
 Class rules establish the current decision for every member in that class. A later field or method rule can
 override that decision for one member, which is what enables contextual exclude/re-include chains.

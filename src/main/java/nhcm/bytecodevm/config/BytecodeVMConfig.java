@@ -22,7 +22,7 @@ public class BytecodeVMConfig
             "perMethodOpcodeMap", "shuffleConstants", "bindConstantsToOperands", "splitCodeStreams",
             "shuffleInstructionBlocks", "obfuscateDispatch", "dynamicCodePoolBuild", "dynamicStateKey", "virtualControlFlowGraph",
             "constantFix", "preEncryptStrings", "preEncryptNumbers", "removeAnnotations",
-            "inlineFields", "inlineCalledProtectedMethods", "inlineStaticFinals",
+            "inlineFields", "inlineCalledProtectedMethods", "inlineStaticFinals", "virtualizeConstructors",
             "annotationOnly", "privateFieldOnly", "ignorePublicCalls", "includeReferencedMethods",
             "watermark",
             "includeMethodsCalledWithin", "excludeMethodsCalledWithin", "virtualizeInvocationBridges",
@@ -37,7 +37,7 @@ public class BytecodeVMConfig
             "shuffleInstructionBlocks", "obfuscateDispatch", "dynamicCodePoolBuild", "dynamicStateKey",
             "virtualControlFlowGraph",
             "constantFix", "preEncryptStrings", "preEncryptNumbers",
-            "inlineFields", "inlineCalledProtectedMethods", "inlineStaticFinals",
+            "inlineFields", "inlineCalledProtectedMethods", "inlineStaticFinals", "virtualizeConstructors",
             "superInstruction", "obfuscateInterpretBranch");
 
     public final Path inputFile;
@@ -68,6 +68,7 @@ public class BytecodeVMConfig
     public final boolean inlineFields;
     public final boolean inlineCalledProtectedMethods;
     public final boolean inlineStaticFinals;
+    public final boolean virtualizeConstructors;
     public final boolean annotationOnly;
     public final boolean privateFieldOnly;
     public final boolean ignorePublicCalls;
@@ -215,6 +216,7 @@ public class BytecodeVMConfig
                 .inlineFields(optionalBoolean(yaml, "inlineFields", true))
                 .inlineCalledProtectedMethods(optionalBoolean(yaml, "inlineCalledProtectedMethods", true))
                 .inlineStaticFinals(optionalBoolean(yaml, "inlineStaticFinals", true))
+                .virtualizeConstructors(optionalBoolean(yaml, "virtualizeConstructors", true))
                 .annotationOnly(optionalBoolean(yaml, "annotationOnly", false))
                 .privateFieldOnly(optionalBoolean(yaml, "privateFieldOnly", false))
                 .ignorePublicCalls(optionalBoolean(yaml, "ignorePublicCalls", false))
@@ -302,6 +304,7 @@ public class BytecodeVMConfig
         values.put("inlineFields", inlineFields);
         values.put("inlineCalledProtectedMethods", inlineCalledProtectedMethods);
         values.put("inlineStaticFinals", inlineStaticFinals);
+        values.put("virtualizeConstructors", virtualizeConstructors);
         values.put("annotationOnly", annotationOnly);
         values.put("privateFieldOnly", privateFieldOnly);
         values.put("ignorePublicCalls", ignorePublicCalls);
@@ -381,6 +384,11 @@ public class BytecodeVMConfig
                 .inlineFields(inlineFields)
                 .inlineCalledProtectedMethods(inlineCalledProtectedMethods)
                 .inlineStaticFinals(inlineStaticFinals)
+                .virtualizeConstructors(statementEnabled(
+                        "virtualizeConstructors",
+                        virtualizeConstructors,
+                        owner,
+                        method))
                 .annotationOnly(annotationOnly)
                 .privateFieldOnly(privateFieldOnly)
                 .ignorePublicCalls(ignorePublicCalls)
@@ -439,6 +447,7 @@ public class BytecodeVMConfig
                 .inlineFields(false)
                 .inlineCalledProtectedMethods(false)
                 .inlineStaticFinals(false)
+                .virtualizeConstructors(false)
                 .annotationOnly(true)
                 .privateFieldOnly(true)
                 .ignorePublicCalls(true)

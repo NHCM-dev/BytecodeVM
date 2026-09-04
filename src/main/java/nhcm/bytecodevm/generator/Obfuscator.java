@@ -13,6 +13,7 @@ import nhcm.bytecodevm.generator.editor.transformers.StringTransformer;
 import nhcm.bytecodevm.generator.editor.transformers.ConstantEncryptionStats;
 import nhcm.bytecodevm.generator.editor.inlining.InlineFieldCompatibility;
 import nhcm.bytecodevm.generator.editor.inlining.ClassHierarchyResolver;
+import nhcm.bytecodevm.generator.editor.inlining.ConstructorVirtualizationTransformer;
 import nhcm.bytecodevm.generator.editor.inlining.InlineFieldTransformer;
 import nhcm.bytecodevm.generator.editor.inlining.InlineFieldRuntimeGenerator;
 import nhcm.bytecodevm.generator.editor.inlining.InlineProtectedMethodTransformer;
@@ -345,6 +346,20 @@ public class Obfuscator
         InlineFieldCompatibility fieldCompatibility =
                 InlineFieldCompatibility.analyze(context.classes.values());
         PreTransformStats transforms = runPreTransformers(context.classes.values());
+        Set<String> securityManagerClasses = securityManagerClasses(context.classes.values());
+        ConstructorVirtualizationTransformer.Result constructorResult =
+                new ConstructorVirtualizationTransformer(
+                        config,
+                        targetInclude,
+                        targetExclude,
+                        namer,
+                        securityManagerClasses)
+                        .transform(context.classes.values());
+        Set<MethodNode> constructorContinuations = constructorResult.methods();
+        Map<MethodNode, ConstructorVirtualizationTransformer.Continuation> continuationByMethod =
+                new IdentityHashMap<>();
+        constructorResult.continuations().forEach(continuation ->
+                continuationByMethod.put(continuation.method(), continuation));
 
         String fieldRuntimeName = uniqueSupportClassName(context, "FieldStore");
         String weakFieldKeyName = uniqueSupportClassName(context, "WeakIdentityKey");
@@ -370,7 +385,6 @@ public class Obfuscator
         Map<GeneratorGroupKey, Integer> generatorOrdinals = new HashMap<>();
         Map<MethodNode, VMSetGenerator> methodAssignments = new IdentityHashMap<>();
 
-        Set<String> securityManagerClasses = securityManagerClasses(context.classes.values());
         List<MethodCandidate> candidates = collectMethodCandidates(context.classes.values(), securityManagerClasses);
         Map<MethodId, MethodCandidate> candidateById = indexCandidates(candidates);
         Map<MethodId, Set<MethodId>> callsByMethod = collectInternalCalls(
@@ -405,10 +419,11 @@ public class Obfuscator
                 boolean includedByCall = includedCalls.contains(candidate.id) && !candidate.explicitIncluded;
                 boolean includedByField = fieldReferencedMethods.contains(methodNode) && !candidate.explicitIncluded;
                 boolean includedByReference = referencedCallers.contains(candidate.id) && !candidate.explicitIncluded;
+                boolean includedByConstructor = constructorContinuations.contains(methodNode);
                 boolean excludedByCall = excludedCalls.contains(candidate.id) && !rootMethods.contains(candidate.id);
                 if(!selected(
                         candidate,
-                        includedByCall || includedByField || includedByReference,
+                        includedByCall || includedByField || includedByReference || includedByConstructor,
                         excludedByCall))
                 {
                     if (excludedByCall && candidate.eligible && !candidate.explicitExcluded)
@@ -424,10 +439,14 @@ public class Obfuscator
 
                 matchedMethods++;
                 protectedMethods.add(methodNode);
+                ConstructorVirtualizationTransformer.Continuation continuation =
+                        continuationByMethod.get(methodNode);
                 VMSetGenerator assignedGenerator = assignMethodToVM(
                         classNode,
                         methodNode,
-                        candidate.methodConfig,
+                        continuation == null
+                                ? candidate.methodConfig
+                                : continuation.methodConfig(),
                         globalLocation,
                         allInOneVms,
                         perClassVms,
@@ -436,10 +455,12 @@ public class Obfuscator
                         generatorOrdinals);
                 methodAssignments.put(methodNode, assignedGenerator);
                 plannedMethods.add(new ObfuscationReport.MethodPlan(
-                        candidate.id.owner,
-                        candidate.id.name,
-                        candidate.id.desc,
-                        includedByField
+                        continuation == null ? candidate.id.owner : continuation.owner().name,
+                        continuation == null ? candidate.id.name : continuation.constructor().name,
+                        continuation == null ? candidate.id.desc : continuation.constructor().desc,
+                        includedByConstructor
+                                ? "CONSTRUCTOR_CONTINUATION"
+                                : includedByField
                                 ? "FIELD_REFERENCE"
                                 : includedByReference
                                         ? "METHOD_REFERENCE"
@@ -495,6 +516,19 @@ public class Obfuscator
                                     ? ""
                                     : " (skipped " + LogColors.strong(inlineFieldResult.skipped()) +
                                       " unsafe or unsupported field(s))")));
+        }
+
+        if (!constructorResult.continuations().isEmpty() || constructorResult.skipped() != 0)
+        {
+            logger.info("{}", LogColors.scan(
+                    "Virtualized " + LogColors.strong(constructorResult.continuations().size()) +
+                            " constructor continuation(s)" +
+                            (constructorResult.skipped() == 0
+                                    ? ""
+                                    : " (skipped " + LogColors.strong(constructorResult.skipped()) +
+                                      " constructor(s) without a movable continuation)")));
+            constructorResult.skippedReasons().forEach((reason, count) ->
+                    logger.debug("Skipped {} constructor(s): {}", count, reason));
         }
 
         inlineMethodTransformer = new InlineProtectedMethodTransformer(
@@ -783,7 +817,7 @@ public class Obfuscator
             }
             default -> throw new IllegalStateException("Unknown VM create mode: " + config.createMode);
         }
-        assignedGenerator.addMethod(method, owner);
+        assignedGenerator.addMethod(method, owner, methodConfig);
         return assignedGenerator;
     }
 

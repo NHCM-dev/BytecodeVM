@@ -38,6 +38,7 @@ public class VMSetGenerator
     private static final int CODE_POOL_METHOD_SIZE_LIMIT = 32_000;
 
     private final Map<MethodNode, ClassNode> methodsToObfuscate = new LinkedHashMap<>();
+    private final Map<MethodNode, BytecodeVMConfig> methodConfigOverrides = new IdentityHashMap<>();
     private final Set<Integer> uniqueCodeIds = new LinkedHashSet<>();
 
     public final String vmClassName;
@@ -441,7 +442,11 @@ public class VMSetGenerator
 
     private BytecodeVMConfig resolveMethodConfig(ClassNode owner, MethodNode method)
     {
-        BytecodeVMConfig methodConfig = config.forMethod(owner, method);
+        BytecodeVMConfig methodConfig = methodConfigOverrides.get(method);
+        if (methodConfig == null)
+        {
+            methodConfig = config.forMethod(owner, method);
+        }
         if (methodConfig.vmStructure == vmStructure)
         {
             return methodConfig;
@@ -680,6 +685,15 @@ public class VMSetGenerator
     public void addMethod(MethodNode methodNode, ClassNode classNode)
     {
         methodsToObfuscate.put(methodNode, classNode);
+    }
+
+    public void addMethod(
+            MethodNode methodNode,
+            ClassNode classNode,
+            BytecodeVMConfig methodConfig)
+    {
+        methodsToObfuscate.put(methodNode, classNode);
+        methodConfigOverrides.put(methodNode, methodConfig);
     }
 
     public int methodCount()
