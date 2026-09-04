@@ -1,12 +1,11 @@
 package nhcm.bytecodevm.config;
 
 import lombok.Builder;
+import nhcm.bytecodevm.BytecodeVM;
 import nhcm.bytecodevm.config.sdk.SdkAnnotationReader;
 import nhcm.bytecodevm.enums.VMStructure;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodNode;
-import org.yaml.snakeyaml.DumperOptions;
-import org.yaml.snakeyaml.Yaml;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -23,6 +22,8 @@ public class BytecodeVMConfig
             "perMethodOpcodeMap", "shuffleConstants", "bindConstantsToOperands", "splitCodeStreams",
             "shuffleInstructionBlocks", "obfuscateDispatch", "dynamicCodePoolBuild", "dynamicStateKey", "virtualControlFlowGraph",
             "constantFix", "preEncryptStrings", "preEncryptNumbers", "removeAnnotations",
+            "inlineFields", "inlineCalledProtectedMethods", "inlineStaticFinals",
+            "annotationOnly", "privateFieldOnly", "ignorePublicCalls", "includeReferencedMethods",
             "watermark",
             "includeMethodsCalledWithin", "excludeMethodsCalledWithin", "virtualizeInvocationBridges",
             "vmIntegrityCheck", "vmIntegrityCheckRatio", "vmIntegrityRecheckInterval", "superInstruction",
@@ -36,6 +37,7 @@ public class BytecodeVMConfig
             "shuffleInstructionBlocks", "obfuscateDispatch", "dynamicCodePoolBuild", "dynamicStateKey",
             "virtualControlFlowGraph",
             "constantFix", "preEncryptStrings", "preEncryptNumbers",
+            "inlineFields", "inlineCalledProtectedMethods", "inlineStaticFinals",
             "superInstruction", "obfuscateInterpretBranch");
 
     public final Path inputFile;
@@ -63,6 +65,13 @@ public class BytecodeVMConfig
     public final boolean constantFix;
     public final boolean preEncryptStrings;
     public final boolean preEncryptNumbers;
+    public final boolean inlineFields;
+    public final boolean inlineCalledProtectedMethods;
+    public final boolean inlineStaticFinals;
+    public final boolean annotationOnly;
+    public final boolean privateFieldOnly;
+    public final boolean ignorePublicCalls;
+    public final boolean includeReferencedMethods;
     public final boolean removeAnnotations;
     public final Map<String, String> watermark;
 
@@ -121,19 +130,46 @@ public class BytecodeVMConfig
     public static BytecodeVMConfig parse(Path file) throws IOException
     {
         String fileStr = Files.readString(file);
-        Map<String, Object> yaml = ConfigDocumentParser.parse(fileStr, file);
+        Map<String, Object> yaml = withDefaultConfig(ConfigDocumentParser.parse(fileStr, file));
         return parse(yaml, requiredString(yaml, "input"), requiredString(yaml, "output"));
     }
 
     public static BytecodeVMConfig parse(String config)
     {
-        Map<String, Object> yaml = ConfigDocumentParser.parse(config);
+        Map<String, Object> yaml = withDefaultConfig(ConfigDocumentParser.parse(config));
         return parse(yaml, requiredString(yaml, "input"), requiredString(yaml, "output"));
     }
 
     public static BytecodeVMConfig parse(String config, String input, String output)
     {
-        return parse(ConfigDocumentParser.parse(config), input, output);
+        return parse(withDefaultConfig(ConfigDocumentParser.parse(config)), input, output);
+    }
+
+    private static Map<String, Object> withDefaultConfig(Map<String, Object> overrides)
+    {
+        validateConfigKeys(overrides);
+        Map<String, Object> normalized = new LinkedHashMap<>(overrides);
+        copyLegacyAlias(normalized, "superinstrcution", "superInstruction");
+        copyLegacyAlias(normalized, "superinstrcutioncombinerange", "superInstructionCombineRange");
+
+        Map<String, Object> merged = new LinkedHashMap<>(
+                ConfigDocumentParser.parse(BytecodeVM.defaultConfig()));
+        for (Map.Entry<String, Object> entry : normalized.entrySet())
+        {
+            if (entry.getValue() != null)
+            {
+                merged.put(entry.getKey(), entry.getValue());
+            }
+        }
+        return merged;
+    }
+
+    private static void copyLegacyAlias(Map<String, Object> values, String alias, String canonical)
+    {
+        if (!values.containsKey(canonical) && values.containsKey(alias))
+        {
+            values.put(canonical, values.get(alias));
+        }
     }
 
     private static BytecodeVMConfig parse(Map<String, Object> yaml, String input, String output)
@@ -176,6 +212,13 @@ public class BytecodeVMConfig
                 .constantFix(optionalBoolean(yaml, "constantFix", true))
                 .preEncryptStrings(optionalBoolean(yaml, "preEncryptStrings", true))
                 .preEncryptNumbers(optionalBoolean(yaml, "preEncryptNumbers", true))
+                .inlineFields(optionalBoolean(yaml, "inlineFields", true))
+                .inlineCalledProtectedMethods(optionalBoolean(yaml, "inlineCalledProtectedMethods", true))
+                .inlineStaticFinals(optionalBoolean(yaml, "inlineStaticFinals", true))
+                .annotationOnly(optionalBoolean(yaml, "annotationOnly", false))
+                .privateFieldOnly(optionalBoolean(yaml, "privateFieldOnly", false))
+                .ignorePublicCalls(optionalBoolean(yaml, "ignorePublicCalls", false))
+                .includeReferencedMethods(optionalBoolean(yaml, "includeReferencedMethods", true))
                 .removeAnnotations(optionalBoolean(yaml, "removeAnnotations", true))
                 .watermark(optionalStringMap(yaml, "watermark"))
                 .includeMethodsCalledWithin(optionalBoolean(yaml, "includeMethodsCalledWithin", false))
@@ -256,6 +299,13 @@ public class BytecodeVMConfig
         values.put("constantFix", constantFix);
         values.put("preEncryptStrings", preEncryptStrings);
         values.put("preEncryptNumbers", preEncryptNumbers);
+        values.put("inlineFields", inlineFields);
+        values.put("inlineCalledProtectedMethods", inlineCalledProtectedMethods);
+        values.put("inlineStaticFinals", inlineStaticFinals);
+        values.put("annotationOnly", annotationOnly);
+        values.put("privateFieldOnly", privateFieldOnly);
+        values.put("ignorePublicCalls", ignorePublicCalls);
+        values.put("includeReferencedMethods", includeReferencedMethods);
         values.put("removeAnnotations", removeAnnotations);
         values.put("watermark", new LinkedHashMap<>(watermark));
         values.put("includeMethodsCalledWithin", includeMethodsCalledWithin);
@@ -280,12 +330,7 @@ public class BytecodeVMConfig
 
     public String toYaml()
     {
-        DumperOptions options = new DumperOptions();
-        options.setDefaultFlowStyle(DumperOptions.FlowStyle.BLOCK);
-        options.setPrettyFlow(true);
-        options.setIndent(2);
-        options.setSplitLines(false);
-        return new Yaml(options).dump(toMap());
+        return DocumentedConfigRenderer.render(this);
     }
 
     private static Map<String, List<String>> ruleDocument(Map<String, String[]> groups)
@@ -333,6 +378,13 @@ public class BytecodeVMConfig
                 .constantFix(constantFix)
                 .preEncryptStrings(statementEnabled("preEncryptStrings", preEncryptStrings, owner, method))
                 .preEncryptNumbers(statementEnabled("preEncryptNumbers", preEncryptNumbers, owner, method))
+                .inlineFields(inlineFields)
+                .inlineCalledProtectedMethods(inlineCalledProtectedMethods)
+                .inlineStaticFinals(inlineStaticFinals)
+                .annotationOnly(annotationOnly)
+                .privateFieldOnly(privateFieldOnly)
+                .ignorePublicCalls(ignorePublicCalls)
+                .includeReferencedMethods(includeReferencedMethods)
                 .removeAnnotations(removeAnnotations)
                 .watermark(watermark)
                 .includeMethodsCalledWithin(includeMethodsCalledWithin)
@@ -384,6 +436,13 @@ public class BytecodeVMConfig
                 .constantFix(false)
                 .preEncryptStrings(false)
                 .preEncryptNumbers(false)
+                .inlineFields(false)
+                .inlineCalledProtectedMethods(false)
+                .inlineStaticFinals(false)
+                .annotationOnly(true)
+                .privateFieldOnly(true)
+                .ignorePublicCalls(true)
+                .includeReferencedMethods(false)
                 .removeAnnotations(removeAnnotations)
                 .watermark(watermark)
                 .includeMethodsCalledWithin(false)
@@ -676,10 +735,23 @@ public class BytecodeVMConfig
         public boolean statementMatches(String key, ClassNode owner, MethodNode method)
         {
             TargetMatcher include = includeMatchers.get(key);
-            boolean included = include == null || include.isMethodMatched(owner, method);
+            boolean included = include == null || include.isMethodContextMatched(owner, method);
             TargetMatcher exclude = excludeMatchers.get(key);
-            boolean excluded = exclude != null && exclude.isMethodMatched(owner, method);
+            boolean excluded = exclude != null && exclude.isMethodContextMatched(owner, method);
             return included && !excluded;
+        }
+
+        public boolean statementMatches(String key, ClassNode owner, org.objectweb.asm.tree.FieldNode field)
+        {
+            TargetMatcher include = includeMatchers.get(key);
+            boolean included = include == null || include.isFieldContextMatched(owner, field);
+            return included && !fieldExcluded(key, owner, field);
+        }
+
+        public boolean fieldExcluded(String key, ClassNode owner, org.objectweb.asm.tree.FieldNode field)
+        {
+            TargetMatcher exclude = excludeMatchers.get(key);
+            return exclude != null && exclude.isFieldContextMatched(owner, field);
         }
 
         private static Map<String, TargetMatcher> createMatchers(Map<String, String[]> groups)

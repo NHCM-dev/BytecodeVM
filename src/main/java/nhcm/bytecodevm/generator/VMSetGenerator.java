@@ -53,6 +53,8 @@ public class VMSetGenerator
     private final VMMethodCompiler compiler;
     private final InvocationBridgeGenerator invocationBridgeGenerator;
     private final List<CompiledMethod> compiledMethods = new ArrayList<>();
+    private final Map<MethodNode, CompiledMethod> compiledBySource = new IdentityHashMap<>();
+    private final Map<MethodNode, IntegrityEntryPoint> integrityEntryBySource = new IdentityHashMap<>();
     private final List<CompiledMethod> codePoolMethods = new ArrayList<>();
     private final Map<CompiledMethod, Boolean> singleMethodCodePoolFits = new IdentityHashMap<>();
     @Getter
@@ -144,6 +146,8 @@ public class VMSetGenerator
     {
         Objects.requireNonNull(progress, "progress");
         compiledMethods.clear();
+        compiledBySource.clear();
+        integrityEntryBySource.clear();
         codePoolMethods.clear();
         singleMethodCodePoolFits.clear();
         codePoolGenerators.clear();
@@ -235,6 +239,13 @@ public class VMSetGenerator
         IntegrityEntryTransformer.Result integrityEntries = prepareIntegrityEntries(
                 integrityBuild,
                 integrityProtectedMethods);
+        if (integrityBuild.plan() != null)
+        {
+            integrityEntries.entryNames().forEach((source, name) ->
+                    integrityEntryBySource.put(
+                            source,
+                            new IntegrityEntryPoint(integrityBuild.plan().owner(), name)));
+        }
         VirtualizationResult integrityResult = virtualizeIntegrityDerivation(
                 integrityBuild,
                 integrityEntries,
@@ -410,10 +421,11 @@ public class VMSetGenerator
         if (codePoolParts.size() == 1)
         {
             compiledMethods.add(compiledMethod);
+            compiledBySource.put(method, compiledMethod);
             return;
         }
 
-        compiledMethods.add(new CompiledMethod(
+        CompiledMethod segmented = new CompiledMethod(
                 owner,
                 method,
                 vmMethod,
@@ -422,7 +434,9 @@ public class VMSetGenerator
                 method.desc,
                 MethodUtils.isStatic(method),
                 false,
-                methodConfig));
+                methodConfig);
+        compiledMethods.add(segmented);
+        compiledBySource.put(method, segmented);
     }
 
     private BytecodeVMConfig resolveMethodConfig(ClassNode owner, MethodNode method)
@@ -673,6 +687,16 @@ public class VMSetGenerator
         return methodsToObfuscate.size();
     }
 
+    public CompiledMethod compiledMethod(MethodNode source)
+    {
+        return compiledBySource.get(source);
+    }
+
+    public IntegrityEntryPoint integrityEntry(MethodNode source)
+    {
+        return integrityEntryBySource.get(source);
+    }
+
     private int generateUniqueCodeId()
     {
         int codeId;
@@ -709,5 +733,11 @@ public class VMSetGenerator
 
     private record PendingMethod(ClassNode owner, MethodNode method)
     {
+    }
+
+    public record IntegrityEntryPoint(String owner, String name)
+    {
+        public static final String DESCRIPTOR =
+                "(Ljava/lang/Object;[Ljava/lang/Object;)Ljava/lang/Object;";
     }
 }

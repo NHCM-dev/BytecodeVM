@@ -43,7 +43,7 @@ public abstract class Transformer
         return enabledByRules(
                 sdkOverride,
                 includeMatches(owner, field),
-                exclude.isClassMatched(owner) || exclude.isFieldMatched(owner, field));
+                exclude.isFieldContextMatched(owner, field));
     }
 
     protected boolean shouldEncrypt(ClassNode owner, MethodNode method, Boolean sdkOverride)
@@ -51,7 +51,7 @@ public abstract class Transformer
         return enabledByRules(
                 sdkOverride,
                 includeMatches(owner, method),
-                exclude.isClassMatched(owner) || exclude.isMethodMatched(owner, method));
+                exclude.isMethodContextMatched(owner, method));
     }
 
     private static boolean enabledByRules(Boolean sdkOverride, boolean included, boolean excluded)
@@ -72,15 +72,13 @@ public abstract class Transformer
     protected boolean includeMatches(ClassNode owner, FieldNode field)
     {
         return config.matchRules.includes(configKey).length == 0 ||
-               include.isFieldMatched(owner, field) ||
-               include.isClassMatched(owner);
+               include.isFieldContextMatched(owner, field);
     }
 
     protected boolean includeMatches(ClassNode owner, MethodNode method)
     {
         return config.matchRules.includes(configKey).length == 0 ||
-               include.isMethodMatched(owner, method) ||
-               include.isClassMatched(owner);
+               include.isMethodContextMatched(owner, method);
     }
 
     private static TargetMatcher matcher(String[] rules)

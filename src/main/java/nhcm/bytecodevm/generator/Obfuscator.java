@@ -11,6 +11,11 @@ import nhcm.bytecodevm.generator.editor.transformers.ConstantFixTransformer;
 import nhcm.bytecodevm.generator.editor.transformers.NumberTransformer;
 import nhcm.bytecodevm.generator.editor.transformers.StringTransformer;
 import nhcm.bytecodevm.generator.editor.transformers.ConstantEncryptionStats;
+import nhcm.bytecodevm.generator.editor.inlining.InlineFieldCompatibility;
+import nhcm.bytecodevm.generator.editor.inlining.ClassHierarchyResolver;
+import nhcm.bytecodevm.generator.editor.inlining.InlineFieldTransformer;
+import nhcm.bytecodevm.generator.editor.inlining.InlineFieldRuntimeGenerator;
+import nhcm.bytecodevm.generator.editor.inlining.InlineProtectedMethodTransformer;
 import nhcm.bytecodevm.generator.watermark.WatermarkGenerator;
 import nhcm.bytecodevm.generator.watermark.WatermarkPlan;
 import nhcm.bytecodevm.generator.globalclass.MethodFrameGenerator;
@@ -23,6 +28,7 @@ import nhcm.bytecodevm.tools.OpcMutator;
 import nhcm.bytecodevm.utils.ClassUtils;
 import nhcm.bytecodevm.utils.LogColors;
 import nhcm.bytecodevm.utils.MethodUtils;
+import nhcm.bytecodevm.utils.RandomUtils;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.IntInsnNode;
@@ -61,6 +67,9 @@ public class Obfuscator
     private int outputClassCount;
     private int outputResourceCount;
     private WatermarkPlan watermarkPlan;
+    private InlineFieldTransformer.Result inlineFieldResult;
+    private InlineProtectedMethodTransformer inlineMethodTransformer;
+    private InlineProtectedMethodTransformer.Prepared inlineMethodPrepared;
 
     public Obfuscator(BytecodeVMConfig config)
     {
@@ -140,6 +149,9 @@ public class Obfuscator
         outputClassCount = 0;
         outputResourceCount = 0;
         watermarkPlan = null;
+        inlineFieldResult = null;
+        inlineMethodTransformer = null;
+        inlineMethodPrepared = new InlineProtectedMethodTransformer.Prepared(0, 0, 0);
     }
 
     private void obfuscateProcess(JarTransformer.JarContext context)
@@ -152,6 +164,7 @@ public class Obfuscator
         context.addClass(watermarkPlan.runtimeClassNode());
         logger.info("{}", LogColors.lifecycle("Adding required VM support classes"));
         logger.debug("{}", LogColors.success("VM support classes are isolated per VM set"));
+        Set<String> finalCodeIdValidationClasses = new LinkedHashSet<>(context.classes.keySet());
         List<VMSetGenerator> generators = new ArrayList<>(this.VMSetGenerators);
         for(VMSetGenerator generator : generators)
         {
@@ -179,7 +192,22 @@ public class Obfuscator
                     result.transformedTarget.size());
             logger.info("{}", LogColors.success("Done virtualizing VM: " + LogColors.strong(generator.vmClassName)));
         }
-        validateFinalCodeIds(context.classes.values(), generators);
+        if (inlineMethodTransformer != null)
+        {
+            InlineProtectedMethodTransformer.Finished finished = inlineMethodTransformer.finish();
+            if (finished.directEntries() != 0)
+            {
+                logger.info("{}", LogColors.success(
+                        "Installed " + LogColors.strong(finished.directEntries()) +
+                                " direct VM entry/entries in their original method slots"));
+            }
+        }
+        validateFinalCodeIds(
+                finalCodeIdValidationClasses.stream()
+                        .map(context.classes::get)
+                        .filter(Objects::nonNull)
+                        .toList(),
+                generators);
         logger.info("{}", LogColors.success("Done virtualizing all classes"));
         if (config.removeAnnotations)
         {
@@ -314,7 +342,22 @@ public class Obfuscator
     {
         logger.info("{}", LogColors.scan("Scanning input file for methods to obfuscate"));
 
+        InlineFieldCompatibility fieldCompatibility =
+                InlineFieldCompatibility.analyze(context.classes.values());
         PreTransformStats transforms = runPreTransformers(context.classes.values());
+
+        String fieldRuntimeName = uniqueSupportClassName(context, "FieldStore");
+        InlineFieldRuntimeGenerator.GeneratedRuntime fieldRuntime =
+                InlineFieldRuntimeGenerator.generate(fieldRuntimeName, namer);
+        InlineFieldTransformer fieldTransformer = new InlineFieldTransformer(
+                config,
+                context.classes.values(),
+                fieldRuntime,
+                fieldCompatibility);
+        Set<MethodNode> fieldReferencedMethods = config.includeReferencedMethods
+                ? fieldTransformer.referencedMethods()
+                : Set.of();
+        Set<MethodNode> protectedMethods = Collections.newSetFromMap(new IdentityHashMap<>());
 
         String globalLocation = "BytecodeVM";
 
@@ -323,16 +366,26 @@ public class Obfuscator
         List<VMSetGenerator> perMethods = new ArrayList<>();
         Map<String, Map<GeneratorProfile, List<VMSetGenerator>>> perPackage = new LinkedHashMap<>();
         Map<GeneratorGroupKey, Integer> generatorOrdinals = new HashMap<>();
+        Map<MethodNode, VMSetGenerator> methodAssignments = new IdentityHashMap<>();
 
         Set<String> securityManagerClasses = securityManagerClasses(context.classes.values());
         List<MethodCandidate> candidates = collectMethodCandidates(context.classes.values(), securityManagerClasses);
         Map<MethodId, MethodCandidate> candidateById = indexCandidates(candidates);
-        Map<MethodId, Set<MethodId>> callsByMethod = collectInternalCalls(candidates, candidateById);
+        Map<MethodId, Set<MethodId>> callsByMethod = collectInternalCalls(
+                candidates,
+                candidateById,
+                new ClassHierarchyResolver(context.classes.values()));
         Set<MethodId> rootMethods = rootMethods(candidates);
         Set<MethodId> includeRoots = rootsWithPolicy(rootMethods, candidateById, SdkCallPolicy.INCLUDE);
         Set<MethodId> excludeRoots = rootsWithPolicy(rootMethods, candidateById, SdkCallPolicy.EXCLUDE);
         Set<MethodId> includedCalls = collectCalledWithin(includeRoots, callsByMethod, candidateById);
         Set<MethodId> excludedCalls = collectCalledWithin(excludeRoots, callsByMethod, candidateById);
+        Set<MethodId> referencedCallers = referencedCallers(
+                candidates,
+                candidateById,
+                callsByMethod,
+                includedCalls,
+                excludedCalls);
 
         int matchedMethods = 0;
         int calledMethodsIncluded = 0;
@@ -358,8 +411,13 @@ public class Obfuscator
                     continue;
                 }
                 boolean includedByCall = includedCalls.contains(candidate.id) && !candidate.explicitIncluded;
+                boolean includedByField = fieldReferencedMethods.contains(methodNode) && !candidate.explicitIncluded;
+                boolean includedByReference = referencedCallers.contains(candidate.id) && !candidate.explicitIncluded;
                 boolean excludedByCall = excludedCalls.contains(candidate.id) && !rootMethods.contains(candidate.id);
-                if(!selected(candidate, includedByCall, excludedByCall))
+                if(!selected(
+                        candidate,
+                        includedByCall || includedByField || includedByReference,
+                        excludedByCall))
                 {
                     if (excludedByCall && candidate.eligible && !candidate.explicitExcluded)
                     {
@@ -373,6 +431,7 @@ public class Obfuscator
                 }
 
                 matchedMethods++;
+                protectedMethods.add(methodNode);
                 GeneratorProfile profile = GeneratorProfile.of(candidate.methodConfig);
 
                 VMSetGenerator assignedGenerator = null;
@@ -438,11 +497,16 @@ public class Obfuscator
                 assignedGenerator = Objects.requireNonNull(
                         assignedGenerator,
                         "VM generator assignment");
+                methodAssignments.put(methodNode, assignedGenerator);
                 plannedMethods.add(new ObfuscationReport.MethodPlan(
                         candidate.id.owner,
                         candidate.id.name,
                         candidate.id.desc,
-                        selectionSource(candidate, includedByCall),
+                        includedByField
+                                ? "FIELD_REFERENCE"
+                                : includedByReference
+                                        ? "METHOD_REFERENCE"
+                                        : selectionSource(candidate, includedByCall),
                         assignedGenerator.vmClassName,
                         assignedGenerator.vmStructure.name()));
             }
@@ -463,6 +527,39 @@ public class Obfuscator
             {
                 allInOneVms.values().forEach(generators -> addNonEmpty(VMSetGenerators, generators));
             }
+        }
+
+        inlineFieldResult = fieldTransformer.transform(protectedMethods);
+        if (inlineFieldResult.runtimeClass() != null)
+        {
+            context.addClass(inlineFieldResult.runtimeClass());
+            logger.info("{}", LogColors.scan(
+                    "Inlined " + LogColors.strong(inlineFieldResult.fields()) +
+                            " field(s) and rewrote " + LogColors.strong(inlineFieldResult.accesses()) +
+                            " access site(s)" +
+                            (inlineFieldResult.skipped() == 0
+                                    ? ""
+                                    : " (skipped " + LogColors.strong(inlineFieldResult.skipped()) +
+                                      " unsafe or unsupported field(s))")));
+        }
+
+        inlineMethodTransformer = new InlineProtectedMethodTransformer(
+                config,
+                context.classes.values(),
+                protectedMethods,
+                methodAssignments);
+        InlineProtectedMethodTransformer.Prepared inlineMethods = inlineMethodTransformer.prepare();
+        inlineMethodPrepared = inlineMethods;
+        if (inlineMethods.methods() != 0 || inlineMethods.skipped() != 0)
+        {
+            logger.info("{}", LogColors.scan(
+                    "Prepared " + LogColors.strong(inlineMethods.methods()) +
+                            " original-slot VM entry/entries for " +
+                            LogColors.strong(inlineMethods.calls()) + " call site(s)" +
+                            (inlineMethods.skipped() == 0
+                                    ? ""
+                                    : " (skipped " + LogColors.strong(inlineMethods.skipped()) +
+                                      " unsafe target(s))")));
         }
 
         int eligibleMethods = (int) candidates.stream().filter(MethodCandidate::eligible).count();
@@ -555,6 +652,10 @@ public class Obfuscator
                 planningStats.fixedConstants,
                 planningStats.preEncryptedStrings,
                 planningStats.preEncryptedNumbers,
+                inlineFieldResult == null ? 0 : inlineFieldResult.fields(),
+                inlineFieldResult == null ? 0 : inlineFieldResult.accesses(),
+                inlineMethodPrepared == null ? 0 : inlineMethodPrepared.methods(),
+                inlineMethodPrepared == null ? 0 : inlineMethodPrepared.calls(),
                 skippedMethods,
                 vmSets.size(),
                 vmSets,
@@ -628,6 +729,7 @@ public class Obfuscator
                     .build());
             watermarkNamer.reserveClassNames(context.classes.keySet());
         }
+
         String className = watermarkNamer.className("BytecodeVM", "Watermark");
         try
         {
@@ -697,8 +799,6 @@ public class Obfuscator
             Set<String> stackTraceSensitiveMethods = stackTraceSensitiveMethods(classNode);
             SdkAnnotationReader.ClassDirectives classDirectives =
                     SdkAnnotationReader.classDirectives(classNode);
-            boolean classIncluded = targetInclude.isClassMatched(classNode) || classDirectives.included();
-            boolean classExcluded = targetExclude.isClassMatched(classNode) || classDirectives.excluded();
             boolean securityManagerClass = securityManagerClasses.contains(classNode.name);
             for (MethodNode methodNode : classNode.methods)
             {
@@ -709,10 +809,10 @@ public class Obfuscator
                         securityManagerClass,
                         stackTraceSensitiveMethods.contains(methodKey(methodNode)));
                 boolean explicitIncluded = sdkMethod.selected() ||
-                        (classIncluded && targetInclude.isMethodMatched(classNode, methodNode));
-                boolean explicitExcluded = classExcluded ||
+                        targetInclude.isMethodContextMatched(classNode, methodNode);
+                boolean explicitExcluded = classDirectives.excluded() ||
                         sdkMethod.excluded() ||
-                        targetExclude.isMethodMatched(classNode, methodNode);
+                        targetExclude.isMethodContextMatched(classNode, methodNode);
                 BytecodeVMConfig methodConfig = config.forMethod(classNode, methodNode);
                 candidates.add(new MethodCandidate(
                         classNode,
@@ -785,7 +885,8 @@ public class Obfuscator
 
     private static Map<MethodId, Set<MethodId>> collectInternalCalls(
             List<MethodCandidate> candidates,
-            Map<MethodId, MethodCandidate> candidateById)
+            Map<MethodId, MethodCandidate> candidateById,
+            ClassHierarchyResolver hierarchy)
     {
         Map<MethodId, Set<MethodId>> calls = new LinkedHashMap<>();
         for (MethodCandidate candidate : candidates)
@@ -797,7 +898,13 @@ public class Obfuscator
                 {
                     continue;
                 }
-                MethodId target = new MethodId(methodInsn.owner, methodInsn.name, methodInsn.desc);
+                ClassHierarchyResolver.MethodDeclaration declaration = hierarchy.resolveMethod(
+                        methodInsn.owner,
+                        methodInsn.name,
+                        methodInsn.desc);
+                MethodId target = declaration == null
+                        ? new MethodId(methodInsn.owner, methodInsn.name, methodInsn.desc)
+                        : new MethodId(declaration.owner().name, methodInsn.name, methodInsn.desc);
                 MethodCandidate targetCandidate = candidateById.get(target);
                 if (targetCandidate != null && targetCandidate.eligible)
                 {
@@ -833,6 +940,73 @@ public class Obfuscator
             }
         }
         return Set.copyOf(called);
+    }
+
+    private Set<MethodId> referencedCallers(
+            List<MethodCandidate> candidates,
+            Map<MethodId, MethodCandidate> candidateById,
+            Map<MethodId, Set<MethodId>> callsByMethod,
+            Set<MethodId> includedCalls,
+            Set<MethodId> excludedCalls)
+    {
+        if (!config.inlineCalledProtectedMethods || !config.includeReferencedMethods)
+        {
+            return Set.of();
+        }
+        Set<MethodId> selected = new LinkedHashSet<>();
+        for (MethodCandidate candidate : candidates)
+        {
+            boolean includedByCall = includedCalls.contains(candidate.id);
+            boolean excludedByCall = excludedCalls.contains(candidate.id);
+            if (selected(candidate, includedByCall, excludedByCall))
+            {
+                selected.add(candidate.id);
+            }
+        }
+
+        Set<MethodId> referenced = new LinkedHashSet<>();
+        boolean changed;
+        do
+        {
+            changed = false;
+            for (Map.Entry<MethodId, Set<MethodId>> entry : callsByMethod.entrySet())
+            {
+                MethodCandidate caller = candidateById.get(entry.getKey());
+                if (caller == null || !caller.eligible || caller.explicitExcluded ||
+                    excludedCalls.contains(caller.id) || selected.contains(caller.id))
+                {
+                    continue;
+                }
+                boolean callsInlineTarget = entry.getValue().stream().anyMatch(targetId ->
+                {
+                    MethodCandidate target = candidateById.get(targetId);
+                    return selected.contains(targetId) && target != null && inlineMethodCandidate(target);
+                });
+                if (callsInlineTarget)
+                {
+                    selected.add(caller.id);
+                    referenced.add(caller.id);
+                    changed = true;
+                }
+            }
+        } while (changed);
+        return Set.copyOf(referenced);
+    }
+
+    private boolean inlineMethodCandidate(MethodCandidate candidate)
+    {
+        MethodNode method = candidate.method;
+        if (method.name.startsWith("<") ||
+            (method.access & (org.objectweb.asm.Opcodes.ACC_ABSTRACT |
+                              org.objectweb.asm.Opcodes.ACC_NATIVE |
+                              org.objectweb.asm.Opcodes.ACC_SYNCHRONIZED)) != 0)
+        {
+            return false;
+        }
+        return (!config.ignorePublicCalls || (method.access & org.objectweb.asm.Opcodes.ACC_PRIVATE) != 0) &&
+               (!config.annotationOnly ||
+                SdkAnnotationReader.methodDirectives(candidate.owner, method).methodAnnotation()) &&
+               config.matchRules.statementMatches("inlineCalledProtectedMethods", candidate.owner, method);
     }
 
     private boolean selected(MethodCandidate candidate, boolean includedByCall, boolean excludedByCall)
@@ -1127,6 +1301,27 @@ public class Obfuscator
 
     private record GeneratorGroupKey(String scope, GeneratorProfile profile)
     {
+    }
+
+    private String uniqueSupportClassName(JarTransformer.JarContext context, String base)
+    {
+        if (namer.enabled())
+        {
+            String name;
+            do
+            {
+                name = namer.className("BytecodeVM", base);
+            } while (context.classes.containsKey(name));
+            return name;
+        }
+        String stem = "BytecodeVM/" + base;
+        String name = stem;
+        int suffix = 1;
+        while (context.classes.containsKey(name))
+        {
+            name = stem + '$' + suffix++;
+        }
+        return name;
     }
 
     private record PreTransformStats(

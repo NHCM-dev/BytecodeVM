@@ -51,6 +51,8 @@ Create and validate a documented YAML configuration:
 
 ```powershell
 java -jar BytecodeVM.jar init config.yml
+java -jar BytecodeVM.jar preset
+java -jar BytecodeVM.jar preset BALANCED balanced.yml
 java -jar BytecodeVM.jar validate config.yml
 ```
 
@@ -69,11 +71,14 @@ allocation. The optional JSON report contains the complete selected-method plan 
 Protect a JAR and optionally verify every emitted class with ASM:
 
 ```powershell
+java -jar BytecodeVM.jar protect app.jar
 java -jar BytecodeVM.jar protect config.yml
 ```
 
 `protect`, `validate`, and `inspect` accept either a positional YAML config or an input JAR using
-default settings. The command always comes first, followed by its arguments and options.
+default settings. Direct JAR protection always parses the configuration returned by
+`BytecodeVM.defaultConfig()` and only replaces its input and output paths. The command always comes first,
+followed by its arguments and options.
 `--config` remains available for scripts. The commands also support `--input`, `--output`,
 and `--report <report.json>`.
 `protect` also accepts repeatable `--watermark key=value` options for CI and release scripts.
@@ -91,15 +96,16 @@ checks before a release build.
 Legacy `--config`, `--defaultconfig`, and `--defaultrun` invocations remain accepted and are
 mapped to `protect` or `init` with overwrite behavior matching older releases.
 
-`init` writes the documented default configuration. A complete tuned profile can be selected with
-`java -jar BytecodeVM.jar init config.yml --preset BALANCED`. Use `init --list-presets` to inspect
-the gallery. Available presets are `DISABLED`, `SIMPLE`, `CODE_POOL_ONLY`, `FAST`, `LIGHT`,
+`init` only writes the canonical documented default configuration. Presets have their own command:
+`preset` lists the gallery, while `preset BALANCED balanced.yml` writes a complete tuned profile.
+Every generated default or preset file keeps the same field order, spacing, and explanatory comments
+as `BytecodeVM.defaultConfig()`. Available presets are `DISABLED`, `SIMPLE`, `CODE_POOL_ONLY`, `FAST`, `LIGHT`,
 `BALANCED`, `INTEGRITY_FOCUSED`, `STRONG`, `EXTREME`, and `RANDOMIZED`.
 
 Any concrete VM structure can be used directly as a preset. For example,
-`init graph.yml --preset GRAPH` creates a balanced configuration using only one `GRAPH` VM.
+`preset GRAPH graph.yml` creates a balanced configuration using only one `GRAPH` VM.
 `--vm-structure` and `--vm-count` can override a gallery preset, such as
-`init custom.yml --preset STRONG --vm-structure FSM --vm-count 1`.
+`preset STRONG custom.yml --vm-structure FSM --vm-count 1`.
 
 | Preset | Intended use |
 |---|---|
@@ -175,6 +181,16 @@ virtualControlFlowGraph: true
 constantFix: true
 preEncryptStrings: true
 preEncryptNumbers: true
+
+# UNSAFE: Member inlining can break reflection, serialization, frameworks, and external callers.
+inlineFields: true
+inlineCalledProtectedMethods: true
+inlineStaticFinals: true
+annotationOnly: false
+privateFieldOnly: false
+ignorePublicCalls: false
+includeReferencedMethods: true
+
 removeAnnotations: true # Remove BytecodeVM SDK annotations from output classes.
 watermark:               # Optional custom fields; an embedded default is used when empty.
   owner: NHCM
@@ -209,6 +225,9 @@ includes:
   constantFix: ["com.example.secure.* *"]
   preEncryptStrings: ["com.example.secure.* *(*)*"]
   preEncryptNumbers: ["com.example.secure.* *(*)*"]
+  inlineFields: ["com.example.secure.*, secret*, *"]
+  inlineStaticFinals: ["com.example.secure.*, *, java.lang.String"]
+  inlineCalledProtectedMethods: ["com.example.secure.*, verify, boolean(java.lang.String)"]
   superInstruction: ["com.example.hot.* *(*)*"]
 exclusions:
   all: ["* <init>(*)V"]
@@ -217,17 +236,17 @@ exclusions:
 
 ### Options
 
-`input`, `output`, `createMode`, `location`, `renameMode`, `interpretMode`, `includes`, and `exclusions` are required. The boolean protection fields are optional and default to `true` when omitted. Every generated VM set uses an independent random 32-bit opcode mapping.
+Every field is optional. Omitted fields inherit from the canonical `BytecodeVM.defaultConfig()` configuration shown above. A supplied top-level `includes` or `exclusions` section replaces that default section. Every generated VM set uses an independent random 32-bit opcode mapping.
 
 | Field | Values | Default  | Description |
 |---|---|----------|---|
-| `input` | Path | Required | Input jar to transform. |
-| `output` | Path | Required | Output jar path. |
-| `createMode` | `ONE_FOR_ALL`, `PER_METHOD`, `PER_CLASS`, `PER_PACKAGE` | Required | Controls how VM classes are grouped. |
-| `location` | `SAME_PACKAGE_AS_TARGET`, `NEW_PACKAGE`, `ONE_PACKAGE` | Required | Controls where generated VM classes are placed. |
-| `renameMode` | `ENABLE`, `DISABLE` | Required | Randomizes generated VM/support class, field, and method names. It does not rename protected application classes. |
-| `interpretMode` | `SAVE_ALL_INSTRUCTION`, `SAVE_ONLY_REQUIRED_INSTRUCTION` | Required | Controls how many interpreter branches are emitted. |
-| `vmStructure` | See VM Structures below | `MEDIUM` | Selects a concrete VM structure or an automatic protection-strength tier for each VM set. |
+| `input` | Path | `./input.jar` | Input jar to transform. |
+| `output` | Path | `./output.jar` | Output jar path. |
+| `createMode` | `ONE_FOR_ALL`, `PER_METHOD`, `PER_CLASS`, `PER_PACKAGE` | `ONE_FOR_ALL` | Controls how VM classes are grouped. |
+| `location` | `SAME_PACKAGE_AS_TARGET`, `NEW_PACKAGE`, `ONE_PACKAGE` | `ONE_PACKAGE` | Controls where generated VM classes are placed. |
+| `renameMode` | `ENABLE`, `DISABLE` | `DISABLE` | Randomizes generated VM/support class, field, and method names. It does not rename protected application classes. |
+| `interpretMode` | `SAVE_ALL_INSTRUCTION`, `SAVE_ONLY_REQUIRED_INSTRUCTION` | `SAVE_ONLY_REQUIRED_INSTRUCTION` | Controls how many interpreter branches are emitted. |
+| `vmStructure` | See VM Structures below | `HIGH` | Selects a concrete VM structure or an automatic protection-strength tier for each VM set. |
 | `protectCodePool` | `true`, `false` | `true`   | Enables code-pool protection. When disabled, most protection sub-options below have no effect. |
 | `dynamicConstantDecrypt` | `true`, `false` | `true` | Encrypts strings, numeric constants, and type descriptors per use site and decrypts them from the current method, frame, virtual PC, block, instruction, and opcode state. Requires `protectCodePool`. |
 | `virtualizeInstructionAddresses` | `true`, `false` | `true`   | Encodes virtual instruction addresses instead of using direct layout addresses. |
@@ -244,11 +263,18 @@ exclusions:
 | `constantFix` | `true`, `false` | `true`  | Moves `ConstantValue` data from static final fields into `<clinit>` assignments, updates initializer stack metadata, and clears the field value attribute. |
 | `preEncryptStrings` | `true`, `false` | `true` | Adaptively replaces selected string constants with per-site encrypted integer data and an inline runtime decoder before virtualization. Selection accounts for method size, constant count, text length, and estimated generated growth. |
 | `preEncryptNumbers` | `true`, `false` | `true` | Adaptively replaces selected integer, long, float, and double constants with encrypted bit patterns while retaining enough size headroom for virtualization. |
+| `inlineFields` | `true`, `false` | `true` | Removes selected primitive or String fields. Encryption, decryption, and direct storage access are expanded at each original field instruction; the storage class has no accessor or crypto methods. |
+| `inlineCalledProtectedMethods` | `true`, `false` | `true` | Uses the protected method's original owner, name, and descriptor as its direct VM entry. No shared `MethodEntries` bridge class is generated. |
+| `inlineStaticFinals` | `true`, `false` | `true` | Applies direct access-site encryption and storage to selected static-final primitive or String fields. |
+| `annotationOnly` | `true`, `false` | `false` | Restricts unsafe transforms to `@InlineField`, `@InlineFinal`, and method-level `@Virtualize` targets when enabled. The maximum-coverage default lets config match groups select them globally. |
+| `privateFieldOnly` | `true`, `false` | `false` | Limits config-selected field inlining to private fields when enabled. An explicit SDK field annotation is treated as an intentional override. |
+| `ignorePublicCalls` | `true`, `false` | `false` | Limits unsafe original-slot VM entry selection to private methods when enabled. The default also handles package, protected, and public call sites. |
+| `includeReferencedMethods` | `true`, `false` | `true` | Automatically protects eligible methods that access selected fields or call original-slot VM entries. Explicit exclusions still win. |
 | `removeAnnotations` | `true`, `false` | `true` | Removes BytecodeVM SDK annotations from classes and methods after their options have been applied. Other application annotations are untouched. |
 | `watermark` | key/value map | `{}` | Adds custom fields to the mandatory bytecode-embedded watermark. Empty maps receive a default label. |
 | `includeMethodsCalledWithin` | `true`, `false` | `false`  | Recursively includes target-jar methods called from explicitly included methods. |
 | `excludeMethodsCalledWithin` | `true`, `false` | `false`  | Recursively excludes target-jar methods called from explicitly included methods. |
-| `virtualizeInvocationBridges` | `true`, `true` | `true` | Virtualizes generated `$vm$invoke$N` bridge methods when their bytecode can be represented by the VM. String concat invokedynamic bridges are lowered to normal `StringBuilder` bytecode first. |
+| `virtualizeInvocationBridges` | `true`, `false` | `true` | Virtualizes generated `$vm$invoke$N` bridge methods when their bytecode can be represented by the VM. String concat invokedynamic bridges are lowered to normal `StringBuilder` bytecode first. |
 | `vmIntegrityCheck` | `true`, `false` | `true`  | Generates a second-stage integrity VM that checks the generated VM and CodePool class bytes before dispatching protected methods. |
 | `vmIntegrityCheckRatio` | `0.0` to `1.0` | `1.0` | Controls how many replaced method stubs call the integrity VM. `1.0` checks every stub. |
 | `vmIntegrityRecheckInterval` | `0` to `16777216` | `65536` | Approximate protected-entry interval between low-frequency runtime integrity probes. Each probe rechecks one derivation chunk; `0` disables periodic rechecks. |
@@ -260,8 +286,8 @@ exclusions:
 | `obfuscateInterpretBranch` | `true`, `false` | `true` | Emits randomized sparse decoy branches and decrypts the real branch selector from CodePool data using the current method, state, instruction, virtual-PC, and opcode state. |
 | `interpretBranchCases` | `1` to `8` | `3` | Total generated cases per interpreter branch, including the real branch. `1` disables decoy expansion. |
 | `vmCount` | `1` to `1024` | `5`      | Expands each non-`PER_METHOD` VM grouping into this many randomized VM sets and distributes matched methods among them. Five covers the complete current `HIGH` candidate bag. |
-| `includes` | Array or object of match expressions | Required | Methods/classes to virtualize, plus optional per-boolean include groups. |
-| `exclusions` | Array or object of match expressions | Required | Methods/classes to skip, plus optional per-boolean exclude groups. Exclusions win over includes. |
+| `includes` | Array or object of match expressions | all classes and methods | Methods/classes to virtualize, plus optional per-boolean include groups. |
+| `exclusions` | Array or object of match expressions | constructors | Methods/classes to skip, plus optional per-boolean exclude groups. Exclusions win over includes. |
 
 ## Annotation SDK
 
@@ -273,7 +299,7 @@ repositories {
 }
 
 dependencies {
-    compileOnly 'io.github.nhcm-dev:bytecodevm-sdk:2.1.1'
+    compileOnly 'io.github.nhcm-dev:bytecodevm-sdk:2.2.0'
 }
 ```
 
@@ -283,7 +309,7 @@ For Maven projects, use `provided` scope:
 <dependency>
     <groupId>io.github.nhcm-dev</groupId>
     <artifactId>bytecodevm-sdk</artifactId>
-    <version>2.1.1</version>
+    <version>2.2.0</version>
     <scope>provided</scope>
 </dependency>
 ```
@@ -298,11 +324,19 @@ gradlew :sdk:publishToMavenLocal
 
 ```java
 import nhcm.bytecodevm.sdk.annotation.DoNotVirtualize;
+import nhcm.bytecodevm.sdk.annotation.InlineField;
+import nhcm.bytecodevm.sdk.annotation.InlineFinal;
 import nhcm.bytecodevm.sdk.annotation.ProtectClass;
 import nhcm.bytecodevm.sdk.annotation.Virtualize;
 
 @ProtectClass
 public final class LicenseService {
+    @InlineField
+    private int attempts;
+
+    @InlineFinal
+    private static final String PRODUCT = "BytecodeVM";
+
     @Virtualize
     public boolean verify(String key) {
         return key != null;
@@ -354,6 +388,45 @@ public boolean verifyLicense(String key) {
 ```
 
 `CallPolicy.INCLUDE` recursively virtualizes target-JAR methods reachable from that root. `EXCLUDE` recursively excludes them, `NONE` disables expansion for that root, and `CONFIG` uses the YAML call-expansion settings. Invalid SDK numeric ranges report the annotated class and method. With the default `removeAnnotations: true`, all BytecodeVM SDK declaration annotations are removed after their settings have been applied.
+
+## Member Inlining
+
+`inlineFields` removes selected primitive and String fields from their declaring classes and replaces
+ordinary `GETFIELD`, `PUTFIELD`, `GETSTATIC`, and `PUTSTATIC` instructions with in-place storage and
+crypto bytecode. Every field receives an independent randomized storage slot and cipher constants, and
+every write receives a fresh nonce. The generated storage class contains only encrypted record fields;
+it exposes no `get`, `set`, `encode`, or `decode` methods. Arbitrary object and array fields are skipped
+because a live Java object reference cannot be encrypted while preserving its identity and JVM semantics.
+
+`inlineStaticFinals` applies the same storage model specifically to static-final values. A `ConstantValue`
+is moved into the beginning of `<clinit>` before the field is removed, while an existing initializer is
+rewritten in place. `@InlineField` and `@InlineFinal` can select individual fields even when their global
+switch is disabled:
+
+```java
+@InlineField
+private int attempts;
+
+@InlineFinal
+private static final String LICENSE_SALT = "example";
+```
+
+`inlineCalledProtectedMethods` does not generate a shared `MethodEntries` class. The existing replacement
+stage writes the VM execute stub directly into the protected method's original owner/name/descriptor slot,
+so existing calls, recursive calls, method handles, and cross-class callers continue through the same
+symbol. With `annotationOnly: true`, this unsafe mode applies only to methods carrying their own
+`@Virtualize` annotation; a class-level `@ProtectClass` alone does not opt every method into it.
+
+Member removal changes reflection, serialization, framework injection, and external binary APIs. The
+maximum-coverage defaults leave `privateFieldOnly` and `ignorePublicCalls` disabled; enable either limit when
+compatibility matters more than coverage. Record and enum storage, volatile fields, and fields referenced by
+constant method handles are skipped. Fields used through recognizable constant-name reflection, Java
+serialization/externalization, or clone-compatible object layouts are also retained automatically.
+`includeReferencedMethods` automatically
+adds eligible field accessors and callers to the protection plan; explicit exclusions still prevent field
+removal when a required method cannot safely be protected. Constructor accesses remain ordinary JVM
+bytecode, while `<clinit>` keys are hidden only when that initializer is selected for virtualization; neither
+should be the only access path relied on to protect a sensitive member.
 
 ## Watermarks
 
@@ -462,7 +535,7 @@ The integrity VM itself is not included in the hash target set to avoid self-ref
 
 ## Include / Exclude Match Expressions
 
-`includes` and `exclusions` use the same matcher syntax. A target is selected when it matches an include rule and does not match an exclusion rule. Exclusions always win.
+`includes` and `exclusions` use the same matcher syntax. Rules are evaluated from top to bottom and the last matching rule wins inside that list. Prefix a rule with `!` to reverse its result. This supports include, exclude, re-include, and re-exclude chains; the final effective exclusion list still wins over the final inclusion list.
 
 The array form is supported:
 
@@ -475,7 +548,10 @@ You can also use grouped object form:
 
 ```yaml
 includes:
-  all: ["*", "* *(*)*"]
+  all:
+    - "com.example.*"
+    - "!com.example.generated.*"
+    - "com.example.generated.SafeEntry, run, void()"
   protectCodePool: ["* @Sensitive *(*)*"]
   dynamicConstantDecrypt: ["* @Sensitive *(*)*"]
   encryptOperands: ["com.example.secure.* *(*)*"]
@@ -488,11 +564,22 @@ exclusions:
 
 Supported boolean group names are:
 
-`protectCodePool`, `dynamicConstantDecrypt`, `virtualizeInstructionAddresses`, `encryptOperands`, `perMethodOpcodeMap`, `shuffleConstants`, `bindConstantsToOperands`, `splitCodeStreams`, `shuffleInstructionBlocks`, `obfuscateDispatch`, `dynamicCodePoolBuild`, `dynamicStateKey`, `virtualControlFlowGraph`, `constantFix`, `preEncryptStrings`, `preEncryptNumbers`, `superInstruction`, and `obfuscateInterpretBranch`.
+`protectCodePool`, `dynamicConstantDecrypt`, `virtualizeInstructionAddresses`, `encryptOperands`, `perMethodOpcodeMap`, `shuffleConstants`, `bindConstantsToOperands`, `splitCodeStreams`, `shuffleInstructionBlocks`, `obfuscateDispatch`, `dynamicCodePoolBuild`, `dynamicStateKey`, `virtualControlFlowGraph`, `constantFix`, `preEncryptStrings`, `preEncryptNumbers`, `inlineFields`, `inlineStaticFinals`, `inlineCalledProtectedMethods`, `superInstruction`, and `obfuscateInterpretBranch`.
 
-Only included classes and then methods will be processed.
+Class rules establish the current decision for every member in that class. A later field or method rule can
+override that decision for one member, which is what enables contextual exclude/re-include chains.
 
-Wildcards are supported with `*`. Class names use dot form in config rules, while method descriptors use JVM descriptor syntax.
+Wildcards are supported with `*`. Existing JVM-descriptor rules remain valid. A more readable comma form accepts normal Java type names:
+
+```yaml
+includes:
+  inlineFields:
+    - "com.example.Account, balance, long"
+    - "com.example.Account, token, java.lang.String"
+  inlineCalledProtectedMethods:
+    - "com.example.Account, verify, boolean(java.lang.String, int)"
+    - "!com.example.Account, debugVerify, boolean(java.lang.String, int)"
+```
 
 ### Class Rules
 

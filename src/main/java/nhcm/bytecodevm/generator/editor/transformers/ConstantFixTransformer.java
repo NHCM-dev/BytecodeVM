@@ -59,8 +59,7 @@ public class ConstantFixTransformer extends Transformer
                (field.access & Opcodes.ACC_STATIC) != 0 &&
                (field.access & Opcodes.ACC_FINAL) != 0 &&
                (Boolean.TRUE.equals(sdkOverride) || includeMatches(owner, field)) &&
-               !exclude.isClassMatched(owner) &&
-               !exclude.isFieldMatched(owner, field);
+               !exclude.isFieldContextMatched(owner, field);
     }
 
     private static MethodNode findOrCreateClinit(ClassNode classNode)

@@ -27,6 +27,7 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Locale;
 import java.util.concurrent.Callable;
 
 @CommandLine.Command(
@@ -42,6 +43,7 @@ import java.util.concurrent.Callable;
         subcommands = {
                 BytecodeVMCLI.ProtectCommand.class,
                 BytecodeVMCLI.InitCommand.class,
+                BytecodeVMCLI.PresetCommand.class,
                 BytecodeVMCLI.ValidateCommand.class,
                 BytecodeVMCLI.InspectCommand.class,
                 BytecodeVMCLI.WatermarkCommand.class
@@ -190,6 +192,7 @@ public final class BytecodeVMCLI implements Callable<Integer>
                   inspect <source> [options]   Preview include matches and VM allocation.
                   validate <source> [options]  Validate a config and input without writing a JAR.
                   init [config.yml] [options]  Write the documented default configuration.
+                  preset [name] [file]         List or write a documented preset configuration.
                   watermark <jar> [options]   Read and verify an embedded watermark.
 
                 Common options:
@@ -252,7 +255,7 @@ public final class BytecodeVMCLI implements Callable<Integer>
     {
         return switch (value.toLowerCase())
         {
-            case "protect", "init", "validate", "inspect", "watermark" -> true;
+            case "protect", "init", "preset", "validate", "inspect", "watermark" -> true;
             default -> false;
         };
     }
@@ -689,41 +692,10 @@ public final class BytecodeVMCLI implements Callable<Integer>
                 description = "Configuration output path.")
         private Path outputOption;
 
-        @CommandLine.Option(
-                names = "--preset",
-                paramLabel = "<name>",
-                description = "Configuration preset or concrete VMStructure name.")
-        private String preset;
-
-        @CommandLine.Option(
-                names = "--list-presets",
-                description = "List configuration presets and exit.")
-        private boolean listPresets;
-
-        @CommandLine.Option(
-                names = "--vm-structure",
-                paramLabel = "<structure>",
-                description = "Override the preset VM structure or automatic tier.")
-        private String vmStructure;
-
-        @CommandLine.Option(
-                names = "--vm-count",
-                paramLabel = "<count>",
-                description = "Override the generated VM count (1-1024).")
-        private Integer vmCount;
-
         @Override
         public Integer call()
         {
             parent.begin();
-            if (listPresets)
-            {
-                // A requested listing remains visible even when normal logs are quiet.
-                CLIRuntime.configure(false, false, parent.resolvedLogFile());
-                logPresetGallery();
-                parent.finish();
-                return CLIExitCodes.SUCCESS;
-            }
             if (positionalOutput != null && outputOption != null)
             {
                 throw new CLIException(CLIExitCodes.USAGE, "Specify the output positionally or with --output, not both");
@@ -739,11 +711,7 @@ public final class BytecodeVMCLI implements Callable<Integer>
                 {
                     Files.createDirectories(directory);
                 }
-                boolean customized = preset != null || vmStructure != null || vmCount != null;
-                String configText = customized
-                        ? customizedConfig().toYaml()
-                        : BytecodeVM.defaultConfig();
-                Files.writeString(absolute, configText);
+                Files.writeString(absolute, BytecodeVM.defaultConfig());
                 if (!parent.quiet())
                 {
                     logger.info("{}", LogColors.success("Config written to " + absolute));
@@ -761,14 +729,117 @@ public final class BytecodeVMCLI implements Callable<Integer>
             }
         }
 
+    }
+
+    @CommandLine.Command(
+            name = "preset",
+            customSynopsis = "java -jar BytecodeVM.jar preset [name] [config.yml] [options]",
+            description = "List presets or write a documented preset YAML configuration.",
+            optionListHeading = "%nOptions:%n",
+            parameterListHeading = "%nArguments:%n",
+            sortOptions = false,
+            usageHelpAutoWidth = true)
+    static final class PresetCommand implements Callable<Integer>
+    {
+        @CommandLine.ParentCommand
+        private BytecodeVMCLI parent;
+
+        @CommandLine.Parameters(
+                index = "0",
+                arity = "0..1",
+                paramLabel = "<name>",
+                description = "Preset or concrete VMStructure name. Omit to list presets.")
+        private String preset;
+
+        @CommandLine.Parameters(
+                index = "1",
+                arity = "0..1",
+                paramLabel = "<file>",
+                description = "Configuration output path (default: <preset>.yml).")
+        private Path positionalOutput;
+
+        @CommandLine.Option(
+                names = {"-o", "--output"},
+                paramLabel = "<file>",
+                description = "Configuration output path.")
+        private Path outputOption;
+
+        @CommandLine.Option(
+                names = "--vm-structure",
+                paramLabel = "<structure>",
+                description = "Override the preset VM structure or automatic tier.")
+        private String vmStructure;
+
+        @CommandLine.Option(
+                names = "--vm-count",
+                paramLabel = "<count>",
+                description = "Override the generated VM count (1-1024).")
+        private Integer vmCount;
+
+        @Override
+        public Integer call()
+        {
+            parent.begin();
+            if (preset == null)
+            {
+                if (positionalOutput != null || outputOption != null ||
+                    vmStructure != null || vmCount != null)
+                {
+                    throw new CLIException(CLIExitCodes.USAGE, "Specify a preset name before preset options");
+                }
+                CLIRuntime.configure(false, false, parent.resolvedLogFile());
+                logPresetGallery();
+                parent.finish();
+                return CLIExitCodes.SUCCESS;
+            }
+            if (positionalOutput != null && outputOption != null)
+            {
+                throw new CLIException(CLIExitCodes.USAGE, "Specify the output positionally or with --output, not both");
+            }
+
+            Path output = outputOption != null
+                    ? outputOption
+                    : positionalOutput != null
+                            ? positionalOutput
+                            : Path.of(defaultFileName(preset));
+            try
+            {
+                BytecodeVMConfig config = customizedConfig();
+                Path absolute = output.toAbsolutePath();
+                Path directory = absolute.getParent();
+                if (directory != null)
+                {
+                    Files.createDirectories(directory);
+                }
+                Files.writeString(absolute, config.toYaml());
+                if (!parent.quiet())
+                {
+                    logger.info("{}", LogColors.success(
+                            "Preset " + preset.toUpperCase(Locale.ROOT) + " written to " + absolute));
+                }
+                parent.finish();
+                return CLIExitCodes.SUCCESS;
+            }
+            catch (IOException exception)
+            {
+                throw new CLIException(
+                        CLIExitCodes.GENERATION,
+                        "Cannot write preset config: " + output.toAbsolutePath(),
+                        exception);
+            }
+            catch (IllegalArgumentException exception)
+            {
+                throw new CLIException(CLIExitCodes.CONFIG, exception.getMessage(), exception);
+            }
+        }
+
         private BytecodeVMConfig customizedConfig()
         {
-            BytecodeVMConfig config = PresetConfigGallery.create(
-                    preset == null ? PresetConfigGallery.BALANCED.name() : preset,
-                    Path.of("./input.jar"),
-                    Path.of("./output.jar"));
-
-            BytecodeVMConfig.BytecodeVMConfigBuilder builder = config.toBuilder();
+            BytecodeVMConfig.BytecodeVMConfigBuilder builder = PresetConfigGallery.create(
+                            preset,
+                            Path.of("./input.jar"),
+                            Path.of("./output.jar"))
+                    .toBuilder();
             if (vmStructure != null)
             {
                 VMStructure structure;
@@ -797,7 +868,15 @@ public final class BytecodeVMCLI implements Callable<Integer>
             return builder.build();
         }
 
-        private void logPresetGallery()
+        private static String defaultFileName(String name)
+        {
+            return name.trim()
+                    .toLowerCase(Locale.ROOT)
+                    .replace('_', '-')
+                    .replaceAll("[^a-z0-9.-]+", "-") + ".yml";
+        }
+
+        private static void logPresetGallery()
         {
             logger.info("{}", LogColors.lifecycle("Available configuration presets:"));
             for (PresetConfigGallery.Preset available : PresetConfigGallery.presets())
@@ -805,7 +884,7 @@ public final class BytecodeVMCLI implements Callable<Integer>
                 logger.info("  {} - {}", available.name(), available.description());
             }
             logger.info("{}", LogColors.lifecycle(
-                    "Any concrete VMStructure can also be used as --preset, for example GRAPH."));
+                    "Concrete VMStructure names are also accepted, for example: preset GRAPH graph.yml"));
         }
     }
 

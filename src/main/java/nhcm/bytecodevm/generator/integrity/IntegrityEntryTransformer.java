@@ -14,7 +14,9 @@ import org.objectweb.asm.tree.ClassNode;
 import org.objectweb.asm.tree.MethodNode;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 
@@ -49,6 +51,7 @@ public final class IntegrityEntryTransformer
     public Result transform(List<CompiledMethod> methods, Set<MethodNode> protectedMethods)
     {
         List<GeneratedColdEntry> coldEntries = new ArrayList<>();
+        Map<MethodNode, String> entryNames = new LinkedHashMap<>();
         for (CompiledMethod method : methods)
         {
             if (!protectedMethods.contains(method.source))
@@ -64,8 +67,9 @@ public final class IntegrityEntryTransformer
             carrierClass.methods.add(generateHotEntry(method, entryName, coldName));
             replaceApplicationStub(method, entryName);
             coldEntries.add(new GeneratedColdEntry(carrierClass, coldMethod));
+            entryNames.put(method.source, entryName);
         }
-        return new Result(List.copyOf(coldEntries));
+        return new Result(List.copyOf(coldEntries), Map.copyOf(entryNames));
     }
 
     private MethodNode generateColdEntry(CompiledMethod method, String name)
@@ -268,11 +272,11 @@ public final class IntegrityEntryTransformer
     {
     }
 
-    public record Result(List<GeneratedColdEntry> coldEntries)
+    public record Result(List<GeneratedColdEntry> coldEntries, Map<MethodNode, String> entryNames)
     {
         public static Result empty()
         {
-            return new Result(List.of());
+            return new Result(List.of(), Map.of());
         }
     }
 

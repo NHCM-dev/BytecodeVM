@@ -69,6 +69,25 @@ public class BytecodeVM
             # that is reconstructed by the code before that code is virtualized.
             preEncryptStrings: true
             preEncryptNumbers: true
+
+            # UNSAFE: Member inlining can break reflection, serialization, frameworks, and external callers.
+            # Enable it per match group or SDK field annotation only when every use is under your control.
+            # Selected primitive/String fields are removed; crypto and storage access are expanded at each GET/PUT.
+            # Selected protected methods keep their original signature as a direct VM entry without bridge classes.
+            inlineFields: true
+            inlineCalledProtectedMethods: true
+            inlineStaticFinals: true
+            # When enabled, unsafe transforms require @InlineField, @InlineFinal,
+            # or a method-level @Virtualize annotation. Disabled by default for maximum coverage.
+            annotationOnly: false
+            # When enabled, config-selected field inlining is limited to private fields.
+            privateFieldOnly: false
+            # When enabled, only private protected methods receive direct VM entry handling;
+            # keep disabled to include package, protected, and public call sites as well.
+            ignorePublicCalls: false
+            # Automatically protect eligible methods that reference members selected for removal.
+            includeReferencedMethods: true
+
             # Removes BytecodeVM SDK annotations from the output JAR.
             removeAnnotations: true
             # Custom watermark fields. Leave empty to use the built-in default watermark.
@@ -98,11 +117,16 @@ public class BytecodeVM
 
             # all selects virtualization targets. Additional groups scope matching boolean options.
             # Matcher strings containing '*' should stay quoted because '*' is YAML alias syntax.
+            # Rules are ordered; prefix with ! to negate a match, then add a later rule to re-include it.
+            # Readable field/method forms are also accepted, for example:
+            #   "com.example.Account, token, java.lang.String"
+            #   "com.example.Account, verify, boolean(java.lang.String, int)"
             # Run `inspect <config.yml>` to preview include matches and VM allocation.
             includes:
               all:
                 - "*"
                 - "* *(*)*"
+                - "* <clinit>()V"
             exclusions:
               all:
                 - "* <init>(*)V"

@@ -4,7 +4,7 @@ plugins {
 }
 
 group = 'io.github.nhcm-dev'
-version = '2.1.1'
+version = '2.2.0'
 description = 'Annotations and watermark utilities for BytecodeVM protection'
 
 base {
@@ -32,7 +32,7 @@ mavenPublishing {
     coordinates(
             'io.github.nhcm-dev',
             'bytecodevm-sdk',
-            '2.1.1'
+            '2.2.0'
     )
 
     pom {

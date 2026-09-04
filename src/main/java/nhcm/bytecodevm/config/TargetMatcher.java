@@ -49,6 +49,58 @@ public class TargetMatcher
         );
     }
 
+    public boolean isFieldContextMatched(ClassNode owner, FieldNode field)
+    {
+        return isMemberContextMatched(
+                RuleType.FIELD,
+                owner.name,
+                field.name,
+                field.desc,
+                owner.visibleAnnotations,
+                owner.invisibleAnnotations,
+                field.visibleAnnotations,
+                field.invisibleAnnotations);
+    }
+
+    public boolean isMethodContextMatched(ClassNode owner, MethodNode method)
+    {
+        return isMemberContextMatched(
+                RuleType.METHOD,
+                owner.name,
+                method.name,
+                method.desc,
+                owner.visibleAnnotations,
+                owner.invisibleAnnotations,
+                method.visibleAnnotations,
+                method.invisibleAnnotations);
+    }
+
+    private boolean isMemberContextMatched(
+            RuleType memberType,
+            String owner,
+            String name,
+            String descriptor,
+            List<AnnotationNode> ownerVisible,
+            List<AnnotationNode> ownerInvisible,
+            List<AnnotationNode> memberVisible,
+            List<AnnotationNode> memberInvisible)
+    {
+        owner = internalClassName(owner);
+        boolean matched = false;
+        for (Rule rule : rules)
+        {
+            boolean applies = rule.type == RuleType.CLASS
+                    ? rule.matchesClass(owner, ownerVisible, ownerInvisible)
+                    : rule.type == memberType &&
+                      rule.matchesMember(owner, name, descriptor, memberVisible, memberInvisible);
+            if (applies)
+            {
+                matched = rule.included;
+            }
+        }
+        return matched;
+    }
+
     public boolean isClassMatched(String className)
     {
         return isClassMatched(className, null, null);
@@ -61,6 +113,7 @@ public class TargetMatcher
     {
         className = internalClassName(className);
 
+        boolean matched = false;
         for (Rule rule : rules)
         {
             if (rule.type == RuleType.CLASS &&
@@ -70,11 +123,10 @@ public class TargetMatcher
                         invisibleAnnotations
                 ))
             {
-                return true;
+                matched = rule.included;
             }
         }
-
-        return false;
+        return matched;
     }
 
     public boolean isFieldMatched(String owner, String name, String desc)
@@ -91,6 +143,7 @@ public class TargetMatcher
     {
         owner = internalClassName(owner);
 
+        boolean matched = false;
         for (Rule rule : rules)
         {
             if (rule.type == RuleType.FIELD &&
@@ -102,11 +155,10 @@ public class TargetMatcher
                         invisibleAnnotations
                 ))
             {
-                return true;
+                matched = rule.included;
             }
         }
-
-        return false;
+        return matched;
     }
 
     public boolean isMethodMatched(String owner, String name, String desc)
@@ -123,6 +175,7 @@ public class TargetMatcher
     {
         owner = internalClassName(owner);
 
+        boolean matched = false;
         for (Rule rule : rules)
         {
             if (rule.type == RuleType.METHOD &&
@@ -134,11 +187,10 @@ public class TargetMatcher
                         invisibleAnnotations
                 ))
             {
-                return true;
+                matched = rule.included;
             }
         }
-
-        return false;
+        return matched;
     }
 
     private static String internalClassName(String name)
@@ -156,6 +208,7 @@ public class TargetMatcher
     private static class Rule
     {
         private final RuleType type;
+        private final boolean included;
         private final Pattern classPattern;
         private final Pattern memberNamePattern;
         private final Pattern descPattern;
@@ -163,12 +216,14 @@ public class TargetMatcher
 
         private Rule(
                 RuleType type,
+                boolean included,
                 Pattern classPattern,
                 Pattern memberNamePattern,
                 Pattern descPattern,
                 Pattern annotationPattern)
         {
             this.type = type;
+            this.included = included;
             this.classPattern = classPattern;
             this.memberNamePattern = memberNamePattern;
             this.descPattern = descPattern;
@@ -178,6 +233,21 @@ public class TargetMatcher
         public static Rule parse(String raw)
         {
             raw = raw.trim();
+            boolean included = true;
+            if (raw.startsWith("!"))
+            {
+                included = false;
+                raw = raw.substring(1).trim();
+            }
+            if (raw.isEmpty())
+            {
+                throw new IllegalArgumentException("Empty match rule");
+            }
+
+            if (raw.indexOf(',') >= 0)
+            {
+                return parseReadable(raw, included);
+            }
 
             String[] parts = raw.split("\\s+");
 
@@ -185,6 +255,7 @@ public class TargetMatcher
             {
                 return new Rule(
                         RuleType.CLASS,
+                        included,
                         wildcardToPattern(parts[0]),
                         null,
                         null,
@@ -198,6 +269,7 @@ public class TargetMatcher
                 {
                     return new Rule(
                             RuleType.CLASS,
+                            included,
                             wildcardToPattern(parts[1]),
                             null,
                             null,
@@ -210,11 +282,12 @@ public class TargetMatcher
 
                 if (isMethodPattern(memberPart))
                 {
-                    return parseMethod(classPart, memberPart, null);
+                    return parseMethod(classPart, memberPart, null, included);
                 }
 
                 return new Rule(
                         RuleType.FIELD,
+                        included,
                         wildcardToPattern(classPart),
                         wildcardToPattern(memberPart),
                         wildcardToPattern("*"),
@@ -238,12 +311,14 @@ public class TargetMatcher
                     return parseMethod(
                             classPart,
                             memberPart,
-                            annotationToPattern(annotationPart)
+                            annotationToPattern(annotationPart),
+                            included
                     );
                 }
 
                 return new Rule(
                         RuleType.FIELD,
+                        included,
                         wildcardToPattern(classPart),
                         wildcardToPattern(memberPart),
                         wildcardToPattern("*"),
@@ -257,7 +332,8 @@ public class TargetMatcher
         private static Rule parseMethod(
                 String classPart,
                 String memberPart,
-                Pattern annotationPattern)
+                Pattern annotationPattern,
+                boolean included)
         {
             int start = memberPart.indexOf('(');
             int end = memberPart.indexOf(')');
@@ -270,11 +346,99 @@ public class TargetMatcher
 
             return new Rule(
                     RuleType.METHOD,
+                    included,
                     wildcardToPattern(classPart),
                     wildcardToPattern(methodName),
                     wildcardToPattern(desc),
                     annotationPattern
             );
+        }
+
+        private static Rule parseReadable(String raw, boolean included)
+        {
+            String[] parts = raw.split("\\s*,\\s*", 3);
+            if (parts.length < 2 || parts.length > 3 || parts[0].isEmpty() || parts[1].isEmpty())
+            {
+                throw new IllegalArgumentException("Invalid readable match rule: " + raw);
+            }
+            String descriptor = parts.length == 3 ? parts[2].trim() : "*";
+            if (descriptor.contains("("))
+            {
+                return new Rule(
+                        RuleType.METHOD,
+                        included,
+                        wildcardToPattern(parts[0]),
+                        wildcardToPattern(parts[1]),
+                        wildcardToPattern(readableMethodDescriptor(descriptor)),
+                        null);
+            }
+            return new Rule(
+                    RuleType.FIELD,
+                    included,
+                    wildcardToPattern(parts[0]),
+                    wildcardToPattern(parts[1]),
+                    wildcardToPattern(readableTypeDescriptor(descriptor)),
+                    null);
+        }
+
+        private static String readableMethodDescriptor(String signature)
+        {
+            int start = signature.indexOf('(');
+            int end = signature.lastIndexOf(')');
+            if (start < 0 || end < start)
+            {
+                throw new IllegalArgumentException("Invalid readable method signature: " + signature);
+            }
+            String before = signature.substring(0, start).trim();
+            String after = signature.substring(end + 1).trim();
+            String returnType;
+            if (before.isEmpty() || "*".equals(before))
+            {
+                returnType = after.startsWith(":") ? after.substring(1).trim() : "*";
+            }
+            else
+            {
+                returnType = before;
+            }
+            String arguments = signature.substring(start + 1, end).trim();
+            StringBuilder descriptor = new StringBuilder("(");
+            if (!arguments.isEmpty())
+            {
+                for (String argument : arguments.split("\\s*,\\s*"))
+                {
+                    descriptor.append(readableTypeDescriptor(argument));
+                }
+            }
+            return descriptor.append(')').append(readableTypeDescriptor(returnType)).toString();
+        }
+
+        private static String readableTypeDescriptor(String type)
+        {
+            type = type.trim();
+            if (type.isEmpty() || "*".equals(type))
+            {
+                return "*";
+            }
+            int dimensions = 0;
+            while (type.endsWith("[]"))
+            {
+                dimensions++;
+                type = type.substring(0, type.length() - 2).trim();
+            }
+            String descriptor = switch (type)
+            {
+                case "void" -> "V";
+                case "boolean" -> "Z";
+                case "byte" -> "B";
+                case "char" -> "C";
+                case "short" -> "S";
+                case "int" -> "I";
+                case "long" -> "J";
+                case "float" -> "F";
+                case "double" -> "D";
+                default -> 'L' + type.replace('.', '/') + ';';
+            };
+            return "[".repeat(dimensions) + descriptor;
         }
 
         public boolean matchesClass(

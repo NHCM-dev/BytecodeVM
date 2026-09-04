@@ -19,6 +19,8 @@ public final class SdkAnnotationReader
     public static final String VIRTUALIZE = SDK_PREFIX + "annotation/Virtualize;";
     public static final String PROTECT_CLASS = SDK_PREFIX + "annotation/ProtectClass;";
     public static final String DO_NOT_VIRTUALIZE = SDK_PREFIX + "annotation/DoNotVirtualize;";
+    public static final String INLINE_FIELD = SDK_PREFIX + "annotation/InlineField;";
+    public static final String INLINE_FINAL = SDK_PREFIX + "annotation/InlineFinal;";
 
     private SdkAnnotationReader()
     {
@@ -61,6 +63,26 @@ public final class SdkAnnotationReader
                 selected,
                 excluded,
                 effective);
+    }
+
+    public static FieldDirectives fieldDirectives(ClassNode owner, org.objectweb.asm.tree.FieldNode field)
+    {
+        String target = owner.name + '.' + field.name + field.desc;
+        AnnotationNode inlineField = find(
+                field.visibleAnnotations,
+                field.invisibleAnnotations,
+                INLINE_FIELD);
+        AnnotationNode inlineFinal = find(
+                field.visibleAnnotations,
+                field.invisibleAnnotations,
+                INLINE_FINAL);
+        return new FieldDirectives(
+                inlineField != null,
+                toggle(values(inlineField).get("enabled"), inlineField == null ? null : true,
+                        target + " @InlineField.enabled"),
+                inlineFinal != null,
+                toggle(values(inlineFinal).get("enabled"), inlineFinal == null ? null : true,
+                        target + " @InlineFinal.enabled"));
     }
 
     public static BytecodeVMConfig applyMethodOverrides(
@@ -359,6 +381,14 @@ public final class SdkAnnotationReader
             boolean selected,
             boolean excluded,
             SdkAnnotationOptions options)
+    {
+    }
+
+    public record FieldDirectives(
+            boolean inlineFieldAnnotation,
+            Boolean inlineField,
+            boolean inlineFinalAnnotation,
+            Boolean inlineFinal)
     {
     }
 }

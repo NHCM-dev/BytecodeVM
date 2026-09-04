@@ -1,20 +1,17 @@
 package nhcm.bytecodevm.config;
 
+import nhcm.bytecodevm.BytecodeVM;
 import nhcm.bytecodevm.enums.VMStructure;
 
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Map;
 import java.util.Locale;
 import java.util.stream.Collectors;
 
 /** Creates complete, independent configurations for common protection levels. */
 public final class PresetConfigGallery
 {
-    private static final String[] DEFAULT_INCLUDES = {"*", "* *(*)*"};
-    private static final String[] DEFAULT_EXCLUSIONS = {"* <init>(*)V"};
-
     private PresetConfigGallery()
     {
     }
@@ -188,52 +185,19 @@ public final class PresetConfigGallery
         {
             throw new IllegalArgumentException("Preset input and output paths are required");
         }
-        String[] includes = DEFAULT_INCLUDES.clone();
-        String[] exclusions = DEFAULT_EXCLUSIONS.clone();
-        return BytecodeVMConfig.builder()
-                .inputFile(input)
-                .outputFile(output)
-                .createMode(BytecodeVMConfig.VMCreateMode.ONE_FOR_ALL)
-                .location(BytecodeVMConfig.VMLocation.ONE_PACKAGE)
-                .renameMode(BytecodeVMConfig.RenameMode.DISABLE)
-                .interpretMode(BytecodeVMConfig.InterpretMode.SAVE_ONLY_REQUIRED_INSTRUCTION)
+        return BytecodeVMConfig.parse(
+                        BytecodeVM.defaultConfig(),
+                        input.toString(),
+                        output.toString())
+                .toBuilder()
                 .vmStructure(VMStructure.MEDIUM)
                 .vmCount(7)
-                .protectCodePool(true)
-                .dynamicConstantDecrypt(true)
-                .virtualizeInstructionAddresses(true)
-                .encryptOperands(true)
-                .perMethodOpcodeMap(true)
-                .shuffleConstants(true)
-                .bindConstantsToOperands(true)
-                .splitCodeStreams(true)
-                .shuffleInstructionBlocks(true)
-                .obfuscateDispatch(true)
-                .dynamicCodePoolBuild(true)
-                .dynamicStateKey(true)
-                .virtualControlFlowGraph(true)
                 .constantFix(false)
-                .preEncryptStrings(true)
-                .preEncryptNumbers(true)
-                .removeAnnotations(true)
-                .watermark(Map.of())
-                .includeMethodsCalledWithin(false)
-                .excludeMethodsCalledWithin(false)
-                .virtualizeInvocationBridges(true)
                 .vmIntegrityCheck(false)
                 .vmIntegrityCheckRatio(0.0D)
                 .vmIntegrityRecheckInterval(0)
-                .superInstruction(true)
-                .superInstructionCombineMin(2)
                 .superInstructionCombineMax(4)
-                .superInstructionMode(BytecodeVMConfig.SuperInstructionMode.HYBRID)
-                .superInstructionMaxHandlers(96)
-                .superInstructionMinFrequency(2)
-                .obfuscateInterpretBranch(true)
-                .interpretBranchCases(3)
-                .includes(includes)
-                .exclusions(exclusions)
-                .matchRules(BytecodeVMConfig.MatchRules.of(includes, exclusions));
+                .superInstructionMaxHandlers(96);
     }
 
     private static BytecodeVMConfig.BytecodeVMConfigBuilder disabled(
@@ -258,6 +222,13 @@ public final class PresetConfigGallery
                 .constantFix(false)
                 .preEncryptStrings(false)
                 .preEncryptNumbers(false)
+                .inlineFields(false)
+                .inlineCalledProtectedMethods(false)
+                .inlineStaticFinals(false)
+                .annotationOnly(false)
+                .privateFieldOnly(false)
+                .ignorePublicCalls(false)
+                .includeReferencedMethods(false)
                 .removeAnnotations(false)
                 .includeMethodsCalledWithin(false)
                 .excludeMethodsCalledWithin(false)
