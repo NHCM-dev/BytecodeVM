@@ -16,6 +16,7 @@ import nhcm.bytecodevm.generator.globalclass.VMProgramGenerator;
 import nhcm.bytecodevm.generator.editor.InvocationBridgeGenerator;
 import nhcm.bytecodevm.generator.editor.MethodsReplacer;
 import nhcm.bytecodevm.generator.virtualization.CodePoolGenerator;
+import nhcm.bytecodevm.generator.virtualization.CodePoolFootprintEstimator;
 import nhcm.bytecodevm.generator.virtualization.superinstruction.SuperInstructionRegistry;
 import nhcm.bytecodevm.generator.virtualization.VMGenerator;
 import nhcm.bytecodevm.generator.virtualization.VMMethodSegmenter;
@@ -36,6 +37,7 @@ import java.util.*;
 public class VMSetGenerator
 {
     private static final int CODE_POOL_METHOD_SIZE_LIMIT = 32_000;
+    private static final long CODE_POOL_SEGMENT_PAYLOAD_LIMIT = 48L * 1024L;
 
     private final Map<MethodNode, ClassNode> methodsToObfuscate = new LinkedHashMap<>();
     private final Map<MethodNode, BytecodeVMConfig> methodConfigOverrides = new IdentityHashMap<>();
@@ -421,8 +423,9 @@ public class VMSetGenerator
         codePoolMethods.addAll(codePoolParts);
         if (codePoolParts.size() == 1)
         {
-            compiledMethods.add(compiledMethod);
-            compiledBySource.put(method, compiledMethod);
+            CompiledMethod publishedMethod = codePoolParts.getFirst();
+            compiledMethods.add(publishedMethod);
+            compiledBySource.put(method, publishedMethod);
             return;
         }
 
@@ -609,7 +612,9 @@ public class VMSetGenerator
 
     private List<CompiledMethod> splitForCodePools(CompiledMethod method)
     {
-        if (fitsInCodePool(List.of(method)))
+        long estimatedPayload = CodePoolFootprintEstimator.estimate(method.vmMethod);
+        if (estimatedPayload <= CODE_POOL_SEGMENT_PAYLOAD_LIMIT &&
+            fitsInCodePool(List.of(method)))
         {
             return List.of(method);
         }
@@ -617,9 +622,24 @@ public class VMSetGenerator
         List<VMInstruction> instructions = method.vmMethod.getInstructions();
         if (instructions.size() <= 1)
         {
+            if (fitsInCodePool(List.of(method)))
+            {
+                return List.of(method);
+            }
             throw methodTooLarge(method);
         }
-        return splitRange(method, instructions, 0, instructions.size());
+
+        // The unsplit method has already failed sizing. Start with two real ranges instead of
+        // retrying the same range under a new random CodePool layout and a different code id.
+        int mid = CodePoolFootprintEstimator.weightedMidpoint(
+                method.vmMethod,
+                instructions,
+                0,
+                instructions.size());
+        List<CompiledMethod> parts = new ArrayList<>();
+        parts.addAll(splitRange(method, instructions, 0, mid));
+        parts.addAll(splitRange(method, instructions, mid, instructions.size()));
+        return List.copyOf(parts);
     }
 
     private List<CompiledMethod> splitRange(
@@ -629,16 +649,30 @@ public class VMSetGenerator
             int to)
     {
         CompiledMethod segment = segment(method, instructions, from, to);
-        if (fitsInCodePool(List.of(segment)))
+        long estimatedPayload = CodePoolFootprintEstimator.estimate(
+                method.vmMethod,
+                instructions,
+                from,
+                to);
+        if (estimatedPayload <= CODE_POOL_SEGMENT_PAYLOAD_LIMIT &&
+            fitsInCodePool(List.of(segment)))
         {
             return List.of(segment);
         }
         if (to - from <= 1)
         {
-            throw methodTooLarge(method);
+            if (fitsInCodePool(List.of(segment)))
+            {
+                return List.of(segment);
+            }
+            throw methodTooLarge(method, estimatedPayload);
         }
 
-        int mid = from + (to - from) / 2;
+        int mid = CodePoolFootprintEstimator.weightedMidpoint(
+                method.vmMethod,
+                instructions,
+                from,
+                to);
         List<CompiledMethod> parts = new ArrayList<>();
         parts.addAll(splitRange(method, instructions, from, mid));
         parts.addAll(splitRange(method, instructions, mid, to));
@@ -671,10 +705,16 @@ public class VMSetGenerator
 
     private static IllegalStateException methodTooLarge(CompiledMethod method)
     {
+        return methodTooLarge(method, CodePoolFootprintEstimator.estimate(method.vmMethod));
+    }
+
+    private static IllegalStateException methodTooLarge(CompiledMethod method, long estimatedPayload)
+    {
         return new IllegalStateException(
                 "VM method cannot fit in a CodePool: " +
                         method.owner.name + '.' +
-                        method.source.name + method.source.desc);
+                        method.source.name + method.source.desc +
+                        " (estimated payload " + estimatedPayload + " byte(s))");
     }
 
     private static String describeMethod(ClassNode owner, MethodNode method)

@@ -29,6 +29,7 @@ public class CodePoolLayout
     public final MethodRef mix;
     public final MethodRef arrayMix;
     public final MethodRef unpackInts;
+    public final MethodRef unpackStringInts;
 
     public CodePoolLayout(String owner, String codePoolDescriptor, String programDescriptor)
     {
@@ -67,6 +68,7 @@ public class CodePoolLayout
         this.mix = method("mix", "(IIII)I");
         this.arrayMix = method("arrayMix", "(II)I");
         this.unpackInts = method("unpackInts", "([JII)[I");
+        this.unpackStringInts = method("unpackStringInts", "([Ljava/lang/String;II)[I");
     }
 
     private FieldRef field(String name, String descriptor)

@@ -38,6 +38,7 @@ public class AdvIBdr
 
     // Human-readable Java-like view, used only for debugging/display.
     private final StringBuilder sourceView = new StringBuilder();
+    private final boolean captureSourceView;
 
     // Active flow scopes used by break/continue.
     private final Deque<FlowScope> flowScopes = new ArrayDeque<>();
@@ -56,8 +57,14 @@ public class AdvIBdr
      */
     public AdvIBdr(MethodNode method)
     {
+        this(method, true);
+    }
+
+    public AdvIBdr(MethodNode method, boolean captureSourceView)
+    {
         this.builder = new InsnBuilder(method.instructions);
         this.method = method;
+        this.captureSourceView = captureSourceView;
         this.nextLocal = initialLocal(method);
         updateMaxLocals(nextLocal);
     }
@@ -67,8 +74,14 @@ public class AdvIBdr
      */
     public AdvIBdr(int nextLocal)
     {
+        this(nextLocal, true);
+    }
+
+    public AdvIBdr(int nextLocal, boolean captureSourceView)
+    {
         this.builder = new InsnBuilder();
         this.method = null;
+        this.captureSourceView = captureSourceView;
         this.nextLocal = nextLocal;
     }
 
@@ -2493,6 +2506,10 @@ public class AdvIBdr
      */
     private void appendView(String line)
     {
+        if (!captureSourceView)
+        {
+            return;
+        }
         sourceView.append("    ".repeat(indent)).append(line).append(System.lineSeparator());
     }
 

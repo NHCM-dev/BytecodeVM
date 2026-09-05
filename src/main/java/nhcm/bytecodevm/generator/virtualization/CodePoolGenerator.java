@@ -32,6 +32,8 @@ import java.util.function.Function;
 
 public class CodePoolGenerator extends ClassObj
 {
+    private static final int INT_STRING_CHUNK_CHARS = 4096;
+
     @Getter
     public final ClassNode classNode;
     @Getter
@@ -183,7 +185,7 @@ public class CodePoolGenerator extends ClassObj
         cn.fields.add(FieldUtils.newFieldNode(new Acc[]{Acc.PRIVATE, Acc.STATIC, Acc.FINAL}, layout.maxStack.name(), layout.maxStack.descriptor()));
 
         MethodNode clinit = MethodUtils.newMethodNode(new Acc[]{Acc.STATIC}, "<clinit>", "()V");
-        AdvIBdr clinitBuilder = new AdvIBdr(0);
+        AdvIBdr clinitBuilder = new AdvIBdr(0, false);
         addClinitHelper(cn, clinitBuilder, 0, initOPCODE_STREAMS());
         addClinitHelper(cn, clinitBuilder, 1, initOPERAND_STREAMS());
         addClinitHelper(cn, clinitBuilder, 2, initLAYOUT_STREAMS());
@@ -203,6 +205,7 @@ public class CodePoolGenerator extends ClassObj
         cn.methods.add(genMixMethod());
         cn.methods.add(genArrayMixMethod());
         cn.methods.add(genUnpackIntsMethod());
+        cn.methods.add(genUnpackStringIntsMethod());
     }
 
     public List<Opcs> getUsedOpcodes()
@@ -245,7 +248,7 @@ public class CodePoolGenerator extends ClassObj
         String name = namer.method(classNode.name, "codePoolInit$" + index, "()V");
         MethodNode helper = MethodUtils.newMethodNode(new Acc[]{Acc.PRIVATE, Acc.STATIC}, name, "()V");
         helper.instructions.add(body);
-        AdvIBdr helperEnd = new AdvIBdr(0);
+        AdvIBdr helperEnd = new AdvIBdr(0, false);
         helperEnd.returnVoid();
         helper.instructions.add(helperEnd.toInsnList());
         classNode.methods.add(helper);
@@ -259,7 +262,7 @@ public class CodePoolGenerator extends ClassObj
                 layout.mix.name(), // mix
                 layout.mix.descriptor() // (IIII)I
         );
-        AdvIBdr ib = new AdvIBdr(method);
+        AdvIBdr ib = new AdvIBdr(method, false);
         Local key = ib.getLocal("key", "I", 0);
         Local a = ib.getLocal("a", "I", 1);
         Local b = ib.getLocal("b", "I", 2);
@@ -286,7 +289,7 @@ public class CodePoolGenerator extends ClassObj
                 layout.arrayMix.name(), // arrayMix
                 layout.arrayMix.descriptor() // (II)I
         );
-        AdvIBdr ib = new AdvIBdr(method);
+        AdvIBdr ib = new AdvIBdr(method, false);
         Local key = ib.getLocal("key", "I", 0);
         Local index = ib.getLocal("index", "I", 1);
         ib.returnValue(AdvIBdr.callStatic(
@@ -307,7 +310,7 @@ public class CodePoolGenerator extends ClassObj
                 layout.unpackInts.name(), // unpackInts
                 layout.unpackInts.descriptor() // ([JII)[I
         );
-        AdvIBdr ib = new AdvIBdr(method);
+        AdvIBdr ib = new AdvIBdr(method, false);
         Local packed = ib.getLocal("packed", "[J", 0);
         Local length = ib.getLocal("length", "I", 1);
         Local key = ib.getLocal("key", "I", 2);
@@ -344,6 +347,71 @@ public class CodePoolGenerator extends ClassObj
                                                     AdvIBdr.plus(outIndex, AdvIBdr.constant(1))))));
                     b.increment(pair, 1);
                     b.increment(outIndex, 2);
+                });
+        ib.returnValue(result);
+        return method;
+    }
+
+    private MethodNode genUnpackStringIntsMethod()
+    {
+        MethodNode method = MethodUtils.newMethodNode(
+                new Acc[]{Acc.PRIVATE, Acc.STATIC},
+                layout.unpackStringInts.name(),
+                layout.unpackStringInts.descriptor());
+        AdvIBdr ib = new AdvIBdr(method, false);
+        Local chunks = ib.getLocal("chunks", "[Ljava/lang/String;", 0);
+        Local length = ib.getLocal("length", "I", 1);
+        Local key = ib.getLocal("key", "I", 2);
+        Local result = ib.getLocal("result", "[I", 3);
+        Local chunkIndex = ib.getLocal("chunkIndex", "I", 4);
+        Local outputIndex = ib.getLocal("outputIndex", "I", 5);
+        Local charIndex = ib.getLocal("charIndex", "I", 6);
+        Local chunk = ib.getLocal("chunk", "Ljava/lang/String;", 7);
+        Local encoded = ib.getLocal("encoded", "I", 8);
+
+        ib.set(result, AdvIBdr.newArray("int", length));
+        ib.set(chunkIndex, AdvIBdr.constant(0));
+        ib.set(outputIndex, AdvIBdr.constant(0));
+        ib.whileLoop(
+                AdvIBdr.lessThan(chunkIndex, AdvIBdr.arrayLength(chunks)),
+                outer -> {
+                    outer.set(chunk, AdvIBdr.arrayAt(chunks, chunkIndex));
+                    outer.set(charIndex, AdvIBdr.constant(0));
+                    outer.whileLoop(
+                            AdvIBdr.lessThan(
+                                    charIndex,
+                                    AdvIBdr.callVirtual(chunk, "java/lang/String", "length", "I")),
+                            inner -> {
+                                inner.set(encoded, AdvIBdr.bitOr(
+                                        AdvIBdr.shiftLeft(
+                                                AdvIBdr.callVirtual(
+                                                        chunk,
+                                                        "java/lang/String",
+                                                        "charAt",
+                                                        "C",
+                                                        charIndex),
+                                                AdvIBdr.constant(16)),
+                                        AdvIBdr.callVirtual(
+                                                chunk,
+                                                "java/lang/String",
+                                                "charAt",
+                                                "C",
+                                                AdvIBdr.plus(charIndex, AdvIBdr.constant(1)))));
+                                inner.setArray(
+                                        result,
+                                        outputIndex,
+                                        AdvIBdr.bitXor(
+                                                encoded,
+                                                AdvIBdr.callStatic(
+                                                        layout.owner,
+                                                        layout.arrayMix.name(),
+                                                        "I",
+                                                        key,
+                                                        outputIndex)));
+                                inner.increment(charIndex, 2);
+                                inner.increment(outputIndex, 1);
+                            });
+                    outer.increment(chunkIndex, 1);
                 });
         ib.returnValue(result);
         return method;
@@ -407,7 +475,7 @@ public class CodePoolGenerator extends ClassObj
 
     private InsnList initMETHOD_KEYS()
     {
-        AdvIBdr ib = new AdvIBdr(0);
+        AdvIBdr ib = new AdvIBdr(0, false);
         int[] keys = new int[methodsByMethodKeyIndex.size()];
         for (int slot = 0; slot < methodsByMethodKeyIndex.size(); slot++)
         {
@@ -420,7 +488,7 @@ public class CodePoolGenerator extends ClassObj
 
     private InsnList initFEATURE_FLAGS()
     {
-        AdvIBdr ib = new AdvIBdr(0);
+        AdvIBdr ib = new AdvIBdr(0, false);
         int[] flags = new int[methodsByFeatureFlagsIndex.size()];
         for (int slot = 0; slot < methodsByFeatureFlagsIndex.size(); slot++)
         {
@@ -437,7 +505,7 @@ public class CodePoolGenerator extends ClassObj
             List<CompiledMethod> methods,
             Function<CompiledMethod, int[]> data)
     {
-        AdvIBdr ib = new AdvIBdr(0);
+        AdvIBdr ib = new AdvIBdr(0, false);
         Local table = ib.var(localName, "[[I");
         ib.set(table, AdvIBdr.newMultiArray("[[I", 1, AdvIBdr.constant(methods.size())));
         for (int slot = 0; slot < methods.size(); slot++)
@@ -461,6 +529,10 @@ public class CodePoolGenerator extends ClassObj
 
     private Local emitIntArray(AdvIBdr ib, String name, int[] values, boolean dynamicCodePoolBuild)
     {
+        if (dynamicCodePoolBuild && values.length > 0)
+        {
+            return emitChunkedIntArray(ib, name, values);
+        }
         if (dynamicCodePoolBuild)
         {
             int key = RandomUtils.randomInt();
@@ -491,6 +563,57 @@ public class CodePoolGenerator extends ClassObj
         return result;
     }
 
+    private Local emitChunkedIntArray(AdvIBdr ib, String name, int[] values)
+    {
+        int key;
+        do
+        {
+            key = RandomUtils.randomInt();
+        }
+        while (key == 0);
+        String[] encodedChunks = encodeIntChunks(values, key, profile);
+        Local chunks = ib.var(name + "Chunks", "[Ljava/lang/String;");
+        ib.set(chunks, AdvIBdr.newArray(
+                "java/lang/String",
+                AdvIBdr.constant(encodedChunks.length)));
+        for (int index = 0; index < encodedChunks.length; index++)
+        {
+            ib.setArray(
+                    chunks,
+                    AdvIBdr.constant(index),
+                    AdvIBdr.constant(encodedChunks[index]));
+        }
+        Local result = ib.var(name, "[I");
+        ib.set(result, AdvIBdr.callStatic(
+                layout.owner,
+                layout.unpackStringInts.name(),
+                "[I",
+                chunks,
+                AdvIBdr.constant(values.length),
+                AdvIBdr.constant(key)));
+        return result;
+    }
+
+    private static String[] encodeIntChunks(int[] values, int key, VMObfProfile profile)
+    {
+        char[] encoded = new char[Math.multiplyExact(values.length, 2)];
+        for (int index = 0; index < values.length; index++)
+        {
+            int value = values[index] ^ profile.arrayMix(key, index);
+            encoded[index * 2] = (char) (value >>> 16);
+            encoded[index * 2 + 1] = (char) value;
+        }
+        String[] chunks = new String[(encoded.length + INT_STRING_CHUNK_CHARS - 1) /
+                INT_STRING_CHUNK_CHARS];
+        for (int index = 0; index < chunks.length; index++)
+        {
+            int from = index * INT_STRING_CHUNK_CHARS;
+            int length = Math.min(INT_STRING_CHUNK_CHARS, encoded.length - from);
+            chunks[index] = new String(encoded, from, length);
+        }
+        return chunks;
+    }
+
     private static long[] packInts(int[] values, int key, VMObfProfile profile)
     {
         long[] packed = new long[(values.length + 1) / 2];
@@ -509,7 +632,7 @@ public class CodePoolGenerator extends ClassObj
 
     private InsnList initCONSTANTS()
     {
-        AdvIBdr ib = new AdvIBdr(0);
+        AdvIBdr ib = new AdvIBdr(0, false);
         Local constantsTable = ib.var("constants", "[[Ljava/lang/Object;");
         ib.set(constantsTable, AdvIBdr.newMultiArray(layout.constants.descriptor(), 1, AdvIBdr.constant(methodsByConstantsIndex.size())));
 
@@ -539,7 +662,7 @@ public class CodePoolGenerator extends ClassObj
 
     private InsnList initEXCEPTION_HANDLERS()
     {
-        AdvIBdr ib = new AdvIBdr(0);
+        AdvIBdr ib = new AdvIBdr(0, false);
         Local exceptionHandlers = ib.var("exceptionHandlers", "[[I");
         ib.set(exceptionHandlers, AdvIBdr.newMultiArray(layout.exceptionHandlers.descriptor(), 1, AdvIBdr.constant(methodsByExceptionHandlersIndex.size())));
         for (int slot = 0; slot < methodsByExceptionHandlersIndex.size(); slot++)
@@ -620,7 +743,7 @@ public class CodePoolGenerator extends ClassObj
 
     private InsnList initMAX_LOCALS_MAX_STACK()
     {
-        AdvIBdr ib = new AdvIBdr(0);
+        AdvIBdr ib = new AdvIBdr(0, false);
         Local maxLocals = ib.var("maxLocals", "[I");
         ib.set(maxLocals, AdvIBdr.newArray("int", AdvIBdr.constant(methodsByMaxLocalsIndex.size())));
         for (int slot = 0; slot < methodsByMaxLocalsIndex.size(); slot++)
@@ -647,7 +770,7 @@ public class CodePoolGenerator extends ClassObj
                 new Acc[]{Acc.PUBLIC},
                 layout.find.name(),
                 layout.find.descriptor());
-        AdvIBdr ib = new AdvIBdr(method);
+        AdvIBdr ib = new AdvIBdr(method, false);
         Local codeIdLocal = ib.getLocal("codeId", "I", 1);
 
         List<CompiledMethod> methodsByCodeId = new ArrayList<>(compiledMethods);
