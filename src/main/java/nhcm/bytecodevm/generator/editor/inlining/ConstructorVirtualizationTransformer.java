@@ -1,7 +1,6 @@
 package nhcm.bytecodevm.generator.editor.inlining;
 
 import nhcm.bytecodevm.config.BytecodeVMConfig;
-import nhcm.bytecodevm.config.TargetMatcher;
 import nhcm.bytecodevm.config.sdk.SdkAnnotationReader;
 import nhcm.bytecodevm.generator.GeneratedMemberNamer;
 import org.objectweb.asm.Opcodes;
@@ -46,22 +45,16 @@ public final class ConstructorVirtualizationTransformer
     private static final int MAX_PARAMETER_SLOTS = 255;
 
     private final BytecodeVMConfig config;
-    private final TargetMatcher includes;
-    private final TargetMatcher exclusions;
     private final GeneratedMemberNamer namer;
     private final Set<String> securityManagerClasses;
     private final Map<String, Integer> nameOrdinals = new LinkedHashMap<>();
 
     public ConstructorVirtualizationTransformer(
             BytecodeVMConfig config,
-            TargetMatcher includes,
-            TargetMatcher exclusions,
             GeneratedMemberNamer namer,
             Set<String> securityManagerClasses)
     {
         this.config = config;
-        this.includes = includes;
-        this.exclusions = exclusions;
         this.namer = namer;
         this.securityManagerClasses = securityManagerClasses;
     }
@@ -112,12 +105,12 @@ public final class ConstructorVirtualizationTransformer
         SdkAnnotationReader.MethodDirectives methodSdk =
                 SdkAnnotationReader.methodDirectives(owner, method);
         if (classSdk.excluded() || methodSdk.excluded() ||
-            exclusions.isMethodContextMatched(owner, method))
+            config.matchRules.methodExcluded("all", owner, method))
         {
             return null;
         }
         boolean explicitlySelected = methodSdk.selected() ||
-                includes.isMethodContextMatched(owner, method);
+                config.matchRules.statementMatches("all", owner, method);
         if (!explicitlySelected)
         {
             return null;

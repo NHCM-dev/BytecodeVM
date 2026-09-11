@@ -1,7 +1,6 @@
 package nhcm.bytecodevm.generator.editor.transformers;
 
 import nhcm.bytecodevm.config.BytecodeVMConfig;
-import nhcm.bytecodevm.config.TargetMatcher;
 import nhcm.bytecodevm.config.sdk.SdkAnnotationReader;
 import nhcm.bytecodevm.generator.abstracts.Transformer;
 import org.objectweb.asm.Opcodes;
@@ -58,8 +57,7 @@ public class ConstantFixTransformer extends Transformer
         return field.value != null &&
                (field.access & Opcodes.ACC_STATIC) != 0 &&
                (field.access & Opcodes.ACC_FINAL) != 0 &&
-               (Boolean.TRUE.equals(sdkOverride) || includeMatches(owner, field)) &&
-               !exclude.isFieldContextMatched(owner, field);
+               super.shouldEncrypt(owner, field, sdkOverride);
     }
 
     private static MethodNode findOrCreateClinit(ClassNode classNode)

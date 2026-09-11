@@ -1,7 +1,6 @@
 package nhcm.bytecodevm.generator;
 
 import nhcm.bytecodevm.config.BytecodeVMConfig;
-import nhcm.bytecodevm.config.TargetMatcher;
 import nhcm.bytecodevm.config.sdk.SdkAnnotationOptions.SdkCallPolicy;
 import nhcm.bytecodevm.config.sdk.SdkAnnotationReader;
 import nhcm.bytecodevm.config.sdk.SdkAnnotationRemover;
@@ -52,8 +51,6 @@ public class Obfuscator
     private static final Logger logger = LoggerFactory.getLogger(Obfuscator.class);
 
     private final BytecodeVMConfig config;
-    private final TargetMatcher targetInclude;
-    private final TargetMatcher targetExclude;
 
     private final List<VMSetGenerator> VMSetGenerators = new ArrayList<>();
     private final GeneratedMemberNamer namer;
@@ -82,16 +79,6 @@ public class Obfuscator
         this.config = config;
         this.seed = seed;
         this.namer = new GeneratedMemberNamer(config);
-        this.targetExclude = new TargetMatcher();
-        for(String exclusion : config.exclusions)
-        {
-            targetExclude.add(exclusion);
-        }
-        this.targetInclude = new TargetMatcher();
-        for(String include : config.includes)
-        {
-            targetInclude.add(include);
-        }
     }
 
     public ObfuscationReport obfuscate() throws IOException
@@ -350,8 +337,6 @@ public class Obfuscator
         ConstructorVirtualizationTransformer.Result constructorResult =
                 new ConstructorVirtualizationTransformer(
                         config,
-                        targetInclude,
-                        targetExclude,
                         namer,
                         securityManagerClasses)
                         .transform(context.classes.values());
@@ -868,10 +853,10 @@ public class Obfuscator
                         securityManagerClass,
                         stackTraceSensitiveMethods.contains(methodKey(methodNode)));
                 boolean explicitIncluded = sdkMethod.selected() ||
-                        targetInclude.isMethodContextMatched(classNode, methodNode);
+                        config.matchRules.statementMatches("all", classNode, methodNode);
                 boolean explicitExcluded = classDirectives.excluded() ||
                         sdkMethod.excluded() ||
-                        targetExclude.isMethodContextMatched(classNode, methodNode);
+                        config.matchRules.methodExcluded("all", classNode, methodNode);
                 BytecodeVMConfig methodConfig = config.forMethod(classNode, methodNode);
                 candidates.add(new MethodCandidate(
                         classNode,
@@ -1092,7 +1077,7 @@ public class Obfuscator
             planningDiagnostics.add(new ObfuscationReport.Diagnostic(
                     "WARN",
                     "NO_METHODS_SELECTED",
-                    "No eligible methods will be virtualized; check includes, exclusions, and SDK annotations."));
+                    "No eligible methods will be virtualized; check includes, excludes, and SDK annotations."));
         }
         else if (explicitlyIncludedMethods == 0)
         {
@@ -1148,8 +1133,7 @@ public class Obfuscator
         return securityManagerClasses.contains(classNode.name) ||
                shouldIgnoreMethod(methodNode) ||
                stackTraceSensitiveMethods.contains(methodKey(methodNode)) ||
-               !targetInclude.isMethodMatched(classNode, methodNode) ||
-               targetExclude.isMethodMatched(classNode, methodNode);
+               !config.matchRules.statementMatches("all", classNode, methodNode);
     }
 
     private static boolean shouldIgnoreMethod(MethodNode methodNode)

@@ -30,7 +30,7 @@ public class BytecodeVMConfig
             "superinstrcution", "superInstructionCombineRange", "superinstrcutioncombinerange",
             "superInstructionMode", "superInstructionMaxHandlers", "superInstructionMinFrequency",
             "obfuscateInterpretBranch", "interpretBranchCases",
-            "includes", "exclusions", "mutateMode");
+            "includes", "excludes", "exclusions", "mutateMode");
     private static final Set<String> MATCH_GROUP_KEYS = java.util.Set.of(
             "all", "protectCodePool", "dynamicConstantDecrypt", "virtualizeInstructionAddresses", "encryptOperands",
             "perMethodOpcodeMap", "shuffleConstants", "bindConstantsToOperands", "splitCodeStreams",
@@ -131,30 +131,44 @@ public class BytecodeVMConfig
     public static BytecodeVMConfig parse(Path file) throws IOException
     {
         String fileStr = Files.readString(file);
-        Map<String, Object> yaml = withDefaultConfig(ConfigDocumentParser.parse(fileStr, file));
-        return parse(yaml, requiredString(yaml, "input"), requiredString(yaml, "output"));
+        ResolvedDocument resolved = withDefaultConfig(ConfigDocumentParser.parseDocument(fileStr, file));
+        return parse(
+                resolved.values(),
+                requiredString(resolved.values(), "input"),
+                requiredString(resolved.values(), "output"),
+                resolved.matchRules());
     }
 
     public static BytecodeVMConfig parse(String config)
     {
-        Map<String, Object> yaml = withDefaultConfig(ConfigDocumentParser.parse(config));
-        return parse(yaml, requiredString(yaml, "input"), requiredString(yaml, "output"));
+        ResolvedDocument resolved = withDefaultConfig(ConfigDocumentParser.parseDocument(config));
+        return parse(
+                resolved.values(),
+                requiredString(resolved.values(), "input"),
+                requiredString(resolved.values(), "output"),
+                resolved.matchRules());
     }
 
     public static BytecodeVMConfig parse(String config, String input, String output)
     {
-        return parse(withDefaultConfig(ConfigDocumentParser.parse(config)), input, output);
+        ResolvedDocument resolved = withDefaultConfig(ConfigDocumentParser.parseDocument(config));
+        return parse(resolved.values(), input, output, resolved.matchRules());
     }
 
-    private static Map<String, Object> withDefaultConfig(Map<String, Object> overrides)
+    private record ResolvedDocument(Map<String, Object> values, MatchRules matchRules)
     {
-        validateConfigKeys(overrides);
-        Map<String, Object> normalized = new LinkedHashMap<>(overrides);
+    }
+
+    private static ResolvedDocument withDefaultConfig(ConfigDocumentParser.Document overrides)
+    {
+        validateConfigKeys(overrides.values());
+        Map<String, Object> normalized = new LinkedHashMap<>(overrides.values());
         copyLegacyAlias(normalized, "superinstrcution", "superInstruction");
         copyLegacyAlias(normalized, "superinstrcutioncombinerange", "superInstructionCombineRange");
 
-        Map<String, Object> merged = new LinkedHashMap<>(
-                ConfigDocumentParser.parse(BytecodeVM.defaultConfig()));
+        ConfigDocumentParser.Document defaults =
+                ConfigDocumentParser.parseDocument(BytecodeVM.defaultConfig());
+        Map<String, Object> merged = new LinkedHashMap<>(defaults.values());
         for (Map.Entry<String, Object> entry : normalized.entrySet())
         {
             if (entry.getValue() != null)
@@ -162,7 +176,10 @@ public class BytecodeVMConfig
                 merged.put(entry.getKey(), entry.getValue());
             }
         }
-        return merged;
+        List<ConfigDocumentParser.MatchBlock> blocks = overrides.matchBlocks().isEmpty()
+                ? defaults.matchBlocks()
+                : overrides.matchBlocks();
+        return new ResolvedDocument(merged, MatchRules.parse(blocks));
     }
 
     private static void copyLegacyAlias(Map<String, Object> values, String alias, String canonical)
@@ -173,10 +190,13 @@ public class BytecodeVMConfig
         }
     }
 
-    private static BytecodeVMConfig parse(Map<String, Object> yaml, String input, String output)
+    private static BytecodeVMConfig parse(
+            Map<String, Object> yaml,
+            String input,
+            String output,
+            MatchRules matchRules)
     {
         validateConfigKeys(yaml);
-        MatchRules matchRules = MatchRules.parse(yaml);
         String[] includes = matchRules.includes("all");
         String[] exclusions = matchRules.exclusions("all");
         int[] superInstructionRange = optionalIntRange(
@@ -327,7 +347,7 @@ public class BytecodeVMConfig
         values.put("obfuscateInterpretBranch", obfuscateInterpretBranch);
         values.put("interpretBranchCases", interpretBranchCases);
         values.put("includes", ruleDocument(matchRules.includes));
-        values.put("exclusions", ruleDocument(matchRules.exclusions));
+        values.put("excludes", ruleDocument(matchRules.exclusions));
         return Collections.unmodifiableMap(values);
     }
 
@@ -697,38 +717,84 @@ public class BytecodeVMConfig
 
     public static final class MatchRules
     {
-        private final Map<String, String[]> includes;
-        private final Map<String, String[]> exclusions;
-        private final Map<String, TargetMatcher> includeMatchers;
-        private final Map<String, TargetMatcher> excludeMatchers;
-
-        private MatchRules(Map<String, String[]> includes, Map<String, String[]> exclusions)
+        public record RuleBlock(boolean included, Map<String, List<String>> groups)
         {
-            this.includes = includes;
-            this.exclusions = exclusions;
-            this.includeMatchers = createMatchers(includes);
-            this.excludeMatchers = createMatchers(exclusions);
+            public RuleBlock
+            {
+                groups = Collections.unmodifiableMap(new LinkedHashMap<>(groups));
+            }
         }
 
-        private static MatchRules parse(Map<String, Object> yaml)
+        private final List<RuleBlock> blocks;
+        private final Map<String, String[]> includes;
+        private final Map<String, String[]> exclusions;
+        private final Map<String, TargetMatcher> matchers;
+        private final Map<String, Boolean> defaults;
+
+        private MatchRules(List<RuleBlock> blocks)
         {
-            return new MatchRules(
-                    parseRuleGroups(yaml, "includes"),
-                    parseRuleGroups(yaml, "exclusions"));
+            this.blocks = List.copyOf(blocks);
+            Map<String, List<String>> includedRules = new LinkedHashMap<>();
+            Map<String, List<String>> excludedRules = new LinkedHashMap<>();
+            Map<String, TargetMatcher> compiled = new HashMap<>();
+            Map<String, Boolean> initialStates = new HashMap<>();
+            for (RuleBlock block : blocks)
+            {
+                for (Map.Entry<String, List<String>> entry : block.groups().entrySet())
+                {
+                    String group = entry.getKey();
+                    if (!MATCH_GROUP_KEYS.contains(group))
+                    {
+                        throw new IllegalArgumentException("Unknown match group: " + group);
+                    }
+                    initialStates.putIfAbsent(group, !block.included());
+                    TargetMatcher matcher = compiled.computeIfAbsent(group, ignored -> new TargetMatcher());
+                    for (String rule : entry.getValue())
+                    {
+                        matcher.add(rule, block.included());
+                    }
+                    (block.included() ? includedRules : excludedRules)
+                            .computeIfAbsent(group, ignored -> new ArrayList<>())
+                            .addAll(entry.getValue());
+                }
+            }
+            this.includes = arrays(includedRules);
+            this.exclusions = arrays(excludedRules);
+            this.matchers = Map.copyOf(compiled);
+            this.defaults = Map.copyOf(initialStates);
+        }
+
+        private static MatchRules parse(List<ConfigDocumentParser.MatchBlock> parsed)
+        {
+            List<RuleBlock> blocks = parsed.stream()
+                    .map(block -> new RuleBlock(block.included(), block.groups()))
+                    .toList();
+            return new MatchRules(blocks);
         }
 
         private static MatchRules empty()
         {
-            return new MatchRules(Map.of(), Map.of());
+            return new MatchRules(List.of());
         }
 
         public static MatchRules of(String[] includes, String[] exclusions)
         {
-            String[] includedRules = includes == null ? new String[0] : includes.clone();
-            String[] excludedRules = exclusions == null ? new String[0] : exclusions.clone();
-            return new MatchRules(
-                    Map.of("all", includedRules),
-                    Map.of("all", excludedRules));
+            List<RuleBlock> blocks = new ArrayList<>();
+            blocks.add(new RuleBlock(true, Map.of(
+                    "all",
+                    List.copyOf(Arrays.asList(includes == null ? new String[0] : includes.clone())))));
+            if (exclusions != null && exclusions.length != 0)
+            {
+                blocks.add(new RuleBlock(false, Map.of(
+                        "all",
+                        List.copyOf(Arrays.asList(exclusions.clone())))));
+            }
+            return new MatchRules(blocks);
+        }
+
+        public List<RuleBlock> blocks()
+        {
+            return blocks;
         }
 
         public String[] includes(String key)
@@ -743,95 +809,66 @@ public class BytecodeVMConfig
 
         public boolean statementMatches(String key, ClassNode owner, MethodNode method)
         {
-            TargetMatcher include = includeMatchers.get(key);
-            boolean included = include == null || include.isMethodContextMatched(owner, method);
-            TargetMatcher exclude = excludeMatchers.get(key);
-            boolean excluded = exclude != null && exclude.isMethodContextMatched(owner, method);
-            return included && !excluded;
+            TargetMatcher matcher = matchers.get(key);
+            return matcher == null || matcher.methodDecision(owner, method)
+                    .orElse(defaults.getOrDefault(key, true));
         }
 
         public boolean statementMatches(String key, ClassNode owner, org.objectweb.asm.tree.FieldNode field)
         {
-            TargetMatcher include = includeMatchers.get(key);
-            boolean included = include == null || include.isFieldContextMatched(owner, field);
-            return included && !fieldExcluded(key, owner, field);
+            TargetMatcher matcher = matchers.get(key);
+            return matcher == null || matcher.fieldDecision(owner, field)
+                    .orElse(defaults.getOrDefault(key, true));
+        }
+
+        public boolean statementMatches(String key, ClassNode owner)
+        {
+            TargetMatcher matcher = matchers.get(key);
+            return matcher == null || matcher.classDecision(owner)
+                    .orElse(defaults.getOrDefault(key, true));
         }
 
         public boolean fieldExcluded(String key, ClassNode owner, org.objectweb.asm.tree.FieldNode field)
         {
-            TargetMatcher exclude = excludeMatchers.get(key);
-            return exclude != null && exclude.isFieldContextMatched(owner, field);
+            TargetMatcher matcher = matchers.get(key);
+            if (matcher == null)
+            {
+                return false;
+            }
+            TargetMatcher.MatchResult decision = matcher.fieldDecision(owner, field);
+            return decision.matched() && !decision.included();
         }
 
-        private static Map<String, TargetMatcher> createMatchers(Map<String, String[]> groups)
+        public boolean classExcluded(String key, ClassNode owner)
         {
-            Map<String, TargetMatcher> result = new HashMap<>();
-            for (Map.Entry<String, String[]> entry : groups.entrySet())
+            TargetMatcher matcher = matchers.get(key);
+            if (matcher == null)
             {
-                if (entry.getValue().length == 0)
-                {
-                    continue;
-                }
-                TargetMatcher matcher = new TargetMatcher();
-                for (String rule : entry.getValue())
-                {
-                    matcher.add(rule);
-                }
-                result.put(entry.getKey(), matcher);
+                return false;
             }
-            return Map.copyOf(result);
+            TargetMatcher.MatchResult decision = matcher.classDecision(owner);
+            return decision.matched() && !decision.included();
         }
 
-        private static Map<String, String[]> parseRuleGroups(Map<String, Object> yaml, String key)
+        public boolean methodExcluded(String key, ClassNode owner, MethodNode method)
         {
-            Object value = yaml.get(key);
-            if (value == null)
+            TargetMatcher matcher = matchers.get(key);
+            if (matcher == null)
             {
-                throw new IllegalArgumentException("Missing required match rules: " + key);
+                return false;
             }
+            TargetMatcher.MatchResult decision = matcher.methodDecision(owner, method);
+            return decision.matched() && !decision.included();
+        }
+
+        private static Map<String, String[]> arrays(Map<String, List<String>> source)
+        {
             Map<String, String[]> result = new HashMap<>();
-            if (value instanceof List<?> rules)
+            for (Map.Entry<String, List<String>> entry : source.entrySet())
             {
-                result.put("all", readRuleArray(rules, key));
-                return Map.copyOf(result);
+                result.put(entry.getKey(), entry.getValue().toArray(String[]::new));
             }
-            if (!(value instanceof Map<?, ?> groups))
-            {
-                throw new IllegalArgumentException("Config value must be a list or map: " + key);
-            }
-            for (Map.Entry<?, ?> entry : groups.entrySet())
-            {
-                if (!(entry.getKey() instanceof String groupName))
-                {
-                    throw new IllegalArgumentException("Match group names must be strings: " + key);
-                }
-                if (!(entry.getValue() instanceof List<?> groupRules))
-                {
-                    throw new IllegalArgumentException("Match group must be a list: " + key + "." + groupName);
-                }
-                if (!MATCH_GROUP_KEYS.contains(groupName))
-                {
-                    throw new IllegalArgumentException("Unknown match group: " + key + "." + groupName);
-                }
-                result.put(groupName, readRuleArray(groupRules, key + "." + groupName));
-            }
-            result.putIfAbsent("all", new String[0]);
             return Map.copyOf(result);
-        }
-
-        private static String[] readRuleArray(List<?> rules, String key)
-        {
-            String[] values = new String[rules.size()];
-            for(int index = 0; index < rules.size(); index++)
-            {
-                Object value = rules.get(index);
-                if (!(value instanceof String rule))
-                {
-                    throw typeError(key + '[' + index + ']', "a string");
-                }
-                values[index] = rule;
-            }
-            return values;
         }
     }
 }

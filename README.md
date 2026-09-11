@@ -64,7 +64,7 @@ java -jar BytecodeVM.jar inspect config.yml --report inspection.json
 java -jar BytecodeVM.jar watermark protected.jar
 ```
 
-`inspect` applies the configured `includes` and `exclusions` through the same selection and VM
+`inspect` applies the configured `includes` and `excludes` through the same selection and VM
 allocation path as `protect`. The terminal only shows the matched method count and concise VM
 allocation. The optional JSON report contains the complete selected-method plan and diagnostics.
 
@@ -217,27 +217,27 @@ obfuscateInterpretBranch: true
 interpretBranchCases: 3
 
 includes:
-  all: ["*", "* *(*)*", "* <init>(*)V"]
-  protectCodePool: ["* @Sensitive *(*)*"]
-  dynamicConstantDecrypt: ["* @Sensitive *(*)*"]
-  encryptOperands: ["com.example.secure.* *(*)*"]
-  obfuscateDispatch: ["* *(*)*"]
-  obfuscateInterpretBranch: ["* @Sensitive *(*)*"]
-  constantFix: ["com.example.secure.* *"]
-  preEncryptStrings: ["com.example.secure.* *(*)*"]
-  preEncryptNumbers: ["com.example.secure.* *(*)*"]
-  inlineFields: ["com.example.secure.*, secret*, *"]
-  inlineStaticFinals: ["com.example.secure.*, *, java.lang.String"]
-  inlineCalledProtectedMethods: ["com.example.secure.*, verify, boolean(java.lang.String)"]
-  superInstruction: ["com.example.hot.* *(*)*"]
-exclusions:
+  all: ["class:*", "field:*", "method:*(*)*"]
+  protectCodePool: ["class:@Sensitive com.example.secure.*;method:*(*)*"]
+  dynamicConstantDecrypt: ["class:@Sensitive com.example.secure.*;method:*(*)*"]
+  encryptOperands: ["class:com.example.secure.*;method:*(*)*"]
+  obfuscateDispatch: ["method:*(*)*"]
+  obfuscateInterpretBranch: ["method:@Sensitive *(*)*"]
+  constantFix: ["class:com.example.secure.*;field:*"]
+  preEncryptStrings: ["class:com.example.secure.*;method:*(*)*"]
+  preEncryptNumbers: ["class:com.example.secure.*;method:*(*)*"]
+  inlineFields: ["class:com.example.secure.*;field:secret*"]
+  inlineStaticFinals: ["class:com.example.secure.*;field:java.lang.String *"]
+  inlineCalledProtectedMethods: ["class:com.example.secure.*;method:boolean verify(java.lang.String)"]
+  superInstruction: ["class:com.example.hot.*;method:*(*)*"]
+excludes:
   all: []
-  dynamicStateKey: ["* fastPath(*)*"]
+  dynamicStateKey: ["method:* fastPath(*)*"]
 ```
 
 ### Options
 
-Every field is optional. Omitted fields inherit from the canonical `BytecodeVM.defaultConfig()` configuration shown above. A supplied top-level `includes` or `exclusions` section replaces that default section. Every generated VM set uses an independent random 32-bit opcode mapping.
+Every field is optional. Omitted fields inherit from the canonical `BytecodeVM.defaultConfig()` configuration shown above. Supplying any `includes` or `excludes` block replaces the default matching chain. Every generated VM set uses an independent random 32-bit opcode mapping.
 
 | Field | Values | Default  | Description |
 |---|---|----------|---|
@@ -271,7 +271,7 @@ Every field is optional. Omitted fields inherit from the canonical `BytecodeVM.d
 | `annotationOnly` | `true`, `false` | `false` | Restricts unsafe transforms to `@InlineField`, `@InlineFinal`, and method-level `@Virtualize` targets when enabled. The maximum-coverage default lets config match groups select them globally. |
 | `privateFieldOnly` | `true`, `false` | `false` | Limits config-selected field inlining to private fields when enabled. An explicit SDK field annotation is treated as an intentional override. |
 | `ignorePublicCalls` | `true`, `false` | `false` | Limits unsafe original-slot VM entry selection to private methods when enabled. The default also handles package, protected, and public call sites. |
-| `includeReferencedMethods` | `true`, `false` | `true` | Automatically protects eligible methods that access selected fields or call original-slot VM entries. Explicit exclusions still win. |
+| `includeReferencedMethods` | `true`, `false` | `true` | Automatically protects eligible methods that access selected fields or call original-slot VM entries. Effective exclude decisions still win. |
 | `removeAnnotations` | `true`, `false` | `true` | Removes BytecodeVM SDK annotations from classes and methods after their options have been applied. Other application annotations are untouched. |
 | `watermark` | key/value map | `{}` | Adds custom fields to the mandatory bytecode-embedded watermark. Empty maps receive a default label. |
 | `includeMethodsCalledWithin` | `true`, `false` | `false`  | Recursively includes target-jar methods called from explicitly included methods. |
@@ -288,8 +288,8 @@ Every field is optional. Omitted fields inherit from the canonical `BytecodeVM.d
 | `obfuscateInterpretBranch` | `true`, `false` | `true` | Emits randomized sparse decoy branches and decrypts the real branch selector from CodePool data using the current method, state, instruction, virtual-PC, and opcode state. |
 | `interpretBranchCases` | `1` to `8` | `3` | Total generated cases per interpreter branch, including the real branch. `1` disables decoy expansion. |
 | `vmCount` | `1` to `1024` | `5`      | Expands each non-`PER_METHOD` VM grouping into this many randomized VM sets and distributes matched methods among them. Five covers the complete current `HIGH` candidate bag. |
-| `includes` | Array or object of match expressions | all classes and methods | Methods/classes to virtualize, plus optional per-boolean include groups. |
-| `exclusions` | Array or object of match expressions | constructors | Methods/classes to skip, plus optional per-boolean exclude groups. Exclusions win over includes. |
+| `includes` | Array or object of typed match expressions | `class:*`, `field:*`, `method:*(*)*` | Selects classes, fields, and methods explicitly, plus optional per-boolean groups. Blocks can be repeated. |
+| `excludes` | Array or object of match expressions | empty | Removes matching targets. Blocks may be repeated and interleaved with `includes`; the last matching block wins. |
 
 ## Annotation SDK
 
@@ -322,7 +322,7 @@ To test the current source checkout instead of the published release, publish it
 gradlew :sdk:publishToMavenLocal
 ```
 
-`@ProtectClass` makes a class eligible for SDK-aware and YAML method matching without automatically virtualizing every method. `@Virtualize` on a class selects all eligible methods; on a method it selects only that method. `@DoNotVirtualize` and YAML exclusions always exclude their target.
+`@ProtectClass` makes a class eligible for SDK-aware and YAML method matching without automatically virtualizing every method. `@Virtualize` on a class selects all eligible methods; on a method it selects only that method. `@DoNotVirtualize` and an effective YAML exclude decision exclude their target.
 
 ```java
 import nhcm.bytecodevm.sdk.annotation.DoNotVirtualize;
@@ -450,7 +450,7 @@ initialized `this`, and fields referenced by
 constant method handles are skipped. Fields used through recognizable constant-name reflection, Java
 serialization/externalization, or clone-compatible object layouts are also retained automatically.
 `includeReferencedMethods` automatically
-adds eligible field accessors and callers to the protection plan; explicit exclusions still prevent field
+adds eligible field accessors and callers to the protection plan; effective exclude decisions still prevent field
 removal when a required method cannot safely be protected. Constructor continuations normally move all
 post-initialization field work into one virtualized body. When a constructor cannot be split safely, individual
 inlined field accesses still use virtualized fallback helpers after `this` has been initialized. Pre-super
@@ -565,93 +565,110 @@ The integrity VM itself is not included in the hash target set to avoid self-ref
 
 ## Include / Exclude Match Expressions
 
-`includes` and `exclusions` use the same matcher syntax. Rules are evaluated from top to bottom and the last matching rule wins inside that list. Prefix a rule with `!` to reverse its result. This supports include, exclude, re-include, and re-exclude chains; the final effective exclusion list still wins over the final inclusion list.
-
-The array form is supported:
+`includes` and `excludes` are ordered decision blocks. They may appear more than once and may be
+interleaved. Rules are evaluated in document order, and the last rule matching a class, field, or
+method decides whether that target is selected. This directly supports exclude, re-include, and
+re-exclude chains:
 
 ```yaml
-includes: ["*", "* *(*)*"]
-exclusions: ["* <init>(*)V"]
+includes:
+  - "class:com.example.*"
+  - "class:com.example.*;field:*"
+  - "class:com.example.*;method:*(*)*"
+excludes:
+  - "class:com.example.internal.*"
+  - "class:com.example.internal.*;field:*"
+  - "class:com.example.internal.*;method:*(*)*"
+includes:
+  - "class:com.example.internal.Api;method:publicEntry(*)*"
+excludes:
+  - "class:com.example.internal.Api;method:debugEntry(*)*"
 ```
 
-You can also use grouped object form:
+When a group first appears in an `includes` block, unmatched targets begin excluded. When it first
+appears in an `excludes` block, unmatched targets begin included. Supplying any matching block in a
+configuration replaces the default matching chain.
+
+Each rule contains one `class:`, `field:`, or `method:` clause. A standalone `class:` rule selects
+only the class itself; it never implicitly selects the class's fields or methods. To select members
+within a class context, combine `class:` with one `field:` or `method:` clause using `;`; both clauses
+must then match. Member clauses without `class:` may carry their own owner pattern.
+
+```yaml
+includes:
+  - "class:@XXX.Annotation Expo.*;method:methodA(int,*)java.lang.String"
+  - "class:pack1.pack2.*.abc;field:java.lang.String field*"
+  - "field:@Anno clazz.* someClazzField"
+  - "method:void <clinit>()V"
+```
+
+The grouped form applies the same ordered-block behavior to individual boolean options:
 
 ```yaml
 includes:
   all:
-    - "com.example.*"
-    - "!com.example.generated.*"
-    - "com.example.generated.SafeEntry, run, void()"
-  protectCodePool: ["* @Sensitive *(*)*"]
-  dynamicConstantDecrypt: ["* @Sensitive *(*)*"]
-  encryptOperands: ["com.example.secure.* *(*)*"]
-exclusions:
-  all: ["* <init>(*)V"]
-  dynamicStateKey: ["* hotLoop(*)*"]
+    - "class:com.example.*"
+    - "class:com.example.*;field:*"
+    - "class:com.example.*;method:*(*)*"
+  protectCodePool: ["class:@Sensitive com.example.*;method:*(*)*"]
+  dynamicConstantDecrypt: ["method:@Sensitive *(*)*"]
+  encryptOperands: ["class:com.example.secure.*;method:*(*)*"]
+excludes:
+  all: ["method:* <init>(*)V"]
+  dynamicStateKey: ["method:* hotLoop(*)*"]
 ```
 
-`all` controls which classes and methods are virtualized. Boolean option groups only control that option for matched methods. For example, if `encryptOperands` is globally `true` and `includes.encryptOperands` is present, operand encryption is enabled only for methods matching that group. If a boolean option is globally `false`, its include group does not turn it on.
+`all` controls which classes, fields, and methods are selected, but each target kind must be matched
+explicitly. Boolean option groups only scope an option that is globally enabled; a matching block
+does not turn on a globally disabled option.
 
 Supported boolean group names are:
 
 `protectCodePool`, `dynamicConstantDecrypt`, `virtualizeInstructionAddresses`, `encryptOperands`, `perMethodOpcodeMap`, `shuffleConstants`, `bindConstantsToOperands`, `splitCodeStreams`, `shuffleInstructionBlocks`, `obfuscateDispatch`, `dynamicCodePoolBuild`, `dynamicStateKey`, `virtualControlFlowGraph`, `constantFix`, `preEncryptStrings`, `preEncryptNumbers`, `inlineFields`, `inlineStaticFinals`, `inlineCalledProtectedMethods`, `virtualizeConstructors`, `superInstruction`, and `obfuscateInterpretBranch`.
 
-Class rules establish the current decision for every member in that class. A later field or method rule can
-override that decision for one member, which is what enables contextual exclude/re-include chains.
-
-Wildcards are supported with `*`. Existing JVM-descriptor rules remain valid. A more readable comma form accepts normal Java type names:
-
-```yaml
-includes:
-  inlineFields:
-    - "com.example.Account, balance, long"
-    - "com.example.Account, token, java.lang.String"
-  inlineCalledProtectedMethods:
-    - "com.example.Account, verify, boolean(java.lang.String, int)"
-    - "!com.example.Account, debugVerify, boolean(java.lang.String, int)"
-```
+Wildcards are supported with `*`. Normal Java type names, arrays, primitive descriptors, object
+descriptors, and wildcard descriptor fragments are accepted. The old space/comma syntax and
+`exclusions` key remain accepted for compatibility, but generated configurations use the typed form.
 
 ### Class Rules
 
 | Expression | Effect |
 |---|---|
-| `*` | Match all classes. |
-| `package.*` | Match classes in `package` and its subpackages. |
-| `@Virtualized *` | Match classes annotated with `@Virtualized`. |
-| `@com.example.Virtualized com.example.*` | Match classes in `com.example` annotated with `@com.example.Virtualized`. |
-| `@Lcom/example/Virtualized; *` | Match classes annotated with descriptor form `Lcom/example/Virtualized;`. |
+| `class:*` | Match all classes only. It does not select any field or method. |
+| `class:package.*` | Match classes in `package` and its subpackages. |
+| `class:@Virtualized *` | Match classes annotated with `@Virtualized`. |
+| `class:@com.example.Virtualized com.example.*` | Match annotated classes in `com.example`. |
 
 ### Field Rules
 
 | Expression | Effect |
 |---|---|
-| `* *` | Match all fields. |
-| `* exclude*` | Match fields whose names start with `exclude`. |
-| `com.example.* token` | Match field `token` in `com.example` classes. |
-| `* @Sensitive *` | Match fields annotated with `@Sensitive`. |
-| `com.example.* @Sensitive secret*` | Match annotated fields whose names start with `secret`. |
+| `field:*` | Match all fields. |
+| `field:com.example.* token` | Match field `token` in `com.example` classes. |
+| `field:com.example.* java.lang.String token*` | Match String fields whose names start with `token`. |
+| `field:@Sensitive com.example.* secret*` | Match annotated fields. |
+| `class:com.example.Account;field:long balance` | Match one typed field within a class context. |
 
 ### Method Rules
 
 | Expression | Effect |
 |---|---|
-| `* *(*)*` | Match all methods with any signature. |
-| `* main(*)*` | Match methods named `main`. |
-| `* main([Ljava/lang/String;)V` | Match `void main(String[])`. |
-| `* @Virtualize *(*)*` | Match methods annotated with `@Virtualize`. |
-| `com.example.* @Virtualize run(*)*` | Match annotated `run` methods in `com.example` classes. |
-| `* <init>(*)V` | Match constructors. |
-| `* <clinit>()V` | Match static initializers. |
+| `method:*(*)*` | Match all methods with any signature. |
+| `method:void main(java.lang.String[])` | Match any `void main(String[])`. |
+| `method:com.example.* boolean verify(java.lang.String,int)` | Match a method with owner and readable types. |
+| `method:@Virtualize com.example.* run(*)*` | Match annotated `run` methods. |
+| `class:com.example.Api;method:lookup(int,*)java.lang.String` | Match using a class context and suffix return type. |
+| `method:void <init>(*)V` | Match constructors. |
+| `method:void <clinit>()V` | Match static initializers. |
 
 Annotation matching checks both runtime-visible and runtime-invisible annotations. You may use a simple annotation name, a full class name, or JVM descriptor form:
 
 ```yaml
 includes:
-  - "@Virtualized *"
-  - "* @Virtualize *(*)*"
-  - "com.example.* @com.example.Protect secret(*)*"
-exclusions:
-  - "* <init>(*)V"
-  - "* <clinit>()V"
-  - "* @DoNotVirtualize *(*)*"
+  - "class:@Virtualized *"
+  - "method:@Virtualize *(*)*"
+excludes:
+  - "method:void <init>(*)V"
+  - "method:void <clinit>()V"
+  - "method:@DoNotVirtualize *(*)*"
 ```

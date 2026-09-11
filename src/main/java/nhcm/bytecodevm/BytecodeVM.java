@@ -120,21 +120,17 @@ public class BytecodeVM
             obfuscateInterpretBranch: true
             interpretBranchCases: 3
 
-            # all selects virtualization targets. Additional groups scope matching boolean options.
-            # Matcher strings containing '*' should stay quoted because '*' is YAML alias syntax.
-            # Rules are ordered; prefix with ! to negate a match, then add a later rule to re-include it.
-            # Readable field/method forms are also accepted, for example:
-            #   "com.example.Account, token, java.lang.String"
-            #   "com.example.Account, verify, boolean(java.lang.String, int)"
+            # Rules are evaluated from top to bottom. Repeat includes/excludes to re-include or
+            # re-exclude a narrower target; the last matching rule wins.
+            # class: only selects classes; it does not implicitly select their fields or methods.
+            # Combine class: with field:/method: to constrain members to an owner context.
+            # Member forms use normal Java types; '*' matches any text or descriptor fragment.
             # Run `inspect <config.yml>` to preview include matches and VM allocation.
             includes:
-              all:
-                - "*"
-                - "* *(*)*"
-                - "* <init>(*)V"
-                - "* <clinit>()V"
-            exclusions:
-              all: []
+              - "class:*"
+              - "class:*;field:*"
+              - "class:*;method:*(*)*"
+            excludes: []
             """;
 
     private static final String asciiArt = """

@@ -18,10 +18,24 @@ final class DocumentedConfigRenderer
         Map<String, Object> values = config.toMap();
         String[] template = BytecodeVM.defaultConfig().split("\\R", -1);
         List<String> output = new ArrayList<>(template.length + 16);
+        boolean rulesRendered = false;
         for (int index = 0; index < template.length; index++)
         {
             String line = template[index];
             String key = topLevelKey(line);
+            if ("includes".equals(key) || "excludes".equals(key) || "exclusions".equals(key))
+            {
+                if (!rulesRendered)
+                {
+                    output.addAll(renderRuleBlocks(config.matchRules.blocks()));
+                    rulesRendered = true;
+                }
+                while (index + 1 < template.length && isChildLine(template[index + 1]))
+                {
+                    index++;
+                }
+                continue;
+            }
             if (key == null || !values.containsKey(key))
             {
                 output.add(line);
@@ -41,6 +55,47 @@ final class DocumentedConfigRenderer
             output.add(key + ": " + scalar(pathValue(key, value)));
         }
         return String.join(System.lineSeparator(), output);
+    }
+
+    private static List<String> renderRuleBlocks(
+            List<BytecodeVMConfig.MatchRules.RuleBlock> blocks)
+    {
+        List<String> lines = new ArrayList<>();
+        for (BytecodeVMConfig.MatchRules.RuleBlock block : blocks)
+        {
+            String key = block.included() ? "includes" : "excludes";
+            Map<String, List<String>> groups = block.groups();
+            if (groups.size() == 1 && groups.containsKey("all"))
+            {
+                List<String> rules = groups.get("all");
+                if (rules.isEmpty())
+                {
+                    lines.add(key + ": []");
+                    continue;
+                }
+                lines.add(key + ':');
+                for (String rule : rules)
+                {
+                    lines.add("  - " + quoted(rule));
+                }
+                continue;
+            }
+            lines.add(key + ':');
+            for (Map.Entry<String, List<String>> entry : groups.entrySet())
+            {
+                if (entry.getValue().isEmpty())
+                {
+                    lines.add("  " + entry.getKey() + ": []");
+                    continue;
+                }
+                lines.add("  " + entry.getKey() + ':');
+                for (String rule : entry.getValue())
+                {
+                    lines.add("    - " + quoted(rule));
+                }
+            }
+        }
+        return lines;
     }
 
     private static List<String> renderMap(String key, Map<?, ?> map)
