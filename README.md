@@ -580,6 +580,7 @@ excludes:
   - "class:com.example.internal.*;field:*"
   - "class:com.example.internal.*;method:*(*)*"
 includes:
+  - "class:com.example.internal.Api"
   - "class:com.example.internal.Api;method:publicEntry(*)*"
 excludes:
   - "class:com.example.internal.Api;method:debugEntry(*)*"
@@ -592,12 +593,14 @@ configuration replaces the default matching chain.
 Each rule contains one `class:`, `field:`, or `method:` clause. In the `all` group, `class:` is a hard
 class gate: a class must be included before any of its members can be processed, and excluding a
 class rejects every field and method inside it. A standalone `class:` rule does not select members;
-`field:` or `method:` must also select the target kind. Combining `class:` with one member clause
-using `;` performs both decisions in one rule. Member clauses without `class:` may carry their own
-owner pattern, but still require a separate matching class declaration in the `all` group.
+`field:` or `method:` must also select the target kind. In a combined rule, `class:` only constrains
+the member owner; it does not alter the class gate. Therefore every member target still requires a
+separate standalone matching `class:` declaration in the `all` group. Member clauses without
+`class:` may carry their own owner pattern and have the same class-gate requirement.
 
 ```yaml
 includes:
+  - "class:*"
   - "class:@XXX.Annotation Expo.*;method:methodA(int,*)java.lang.String"
   - "class:pack1.pack2.*.abc;field:java.lang.String field*"
   - "field:@Anno clazz.* someClazzField"

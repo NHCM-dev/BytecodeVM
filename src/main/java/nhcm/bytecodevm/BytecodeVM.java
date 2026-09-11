@@ -124,7 +124,7 @@ public class BytecodeVM
             # re-exclude a narrower target; the last matching rule wins.
             # class: is the class gate: excluded or unmatched classes are never processed.
             # It does not select members; field:/method: must also select each target kind.
-            # A combined class:...;field:/method:... rule performs both decisions at once.
+            # In a combined rule, class: only limits the owner; declare the class separately.
             # Member forms use normal Java types; '*' matches any text or descriptor fragment.
             # Run `inspect <config.yml>` to preview include matches and VM allocation.
             includes:

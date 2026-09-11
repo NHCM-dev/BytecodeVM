@@ -828,8 +828,12 @@ public class BytecodeVMConfig
         public boolean statementMatches(String key, ClassNode owner)
         {
             TargetMatcher matcher = matchers.get(key);
-            return matcher == null || matcher.classDecision(owner)
-                    .orElse(defaults.getOrDefault(key, true));
+            if (matcher == null)
+            {
+                return true;
+            }
+            TargetMatcher.MatchResult decision = matcher.classDecision(owner);
+            return decision.orElse(!"all".equals(key) && defaults.getOrDefault(key, true));
         }
 
         public boolean fieldExcluded(String key, ClassNode owner, org.objectweb.asm.tree.FieldNode field)
@@ -853,7 +857,9 @@ public class BytecodeVMConfig
                 return false;
             }
             TargetMatcher.MatchResult decision = matcher.classDecision(owner);
-            return decision.matched() && !decision.included();
+            return decision.matched()
+                    ? !decision.included()
+                    : "all".equals(key);
         }
 
         public boolean methodExcluded(String key, ClassNode owner, MethodNode method)
@@ -877,7 +883,7 @@ public class BytecodeVMConfig
             boolean fallback = defaults.getOrDefault(key, true);
             boolean classAllowed = classDecision.matched()
                     ? classDecision.included()
-                    : !"all".equals(key) || fallback;
+                    : !"all".equals(key);
             return classAllowed && memberDecision.orElse(fallback);
         }
 
@@ -890,7 +896,8 @@ public class BytecodeVMConfig
             {
                 return true;
             }
-            if ("all".equals(key) && !classDecision.orElse(defaults.getOrDefault(key, true)))
+            if ("all".equals(key) &&
+                (!classDecision.matched() || !classDecision.included()))
             {
                 return true;
             }

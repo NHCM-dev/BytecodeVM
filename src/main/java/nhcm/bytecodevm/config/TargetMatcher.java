@@ -120,7 +120,7 @@ public final class TargetMatcher
         MatchResult result = new MatchResult(false, false);
         for (Rule rule : rules)
         {
-            if (rule.declaresClass &&
+            if (rule.type == RuleType.CLASS &&
                 rule.matchesClass(className, visibleAnnotations, invisibleAnnotations))
             {
                 result = new MatchResult(true, rule.included);
@@ -179,7 +179,6 @@ public final class TargetMatcher
         private final Pattern descriptor;
         private final Pattern classAnnotation;
         private final Pattern memberAnnotation;
-        private final boolean declaresClass;
 
         private Rule(
                 RuleType type,
@@ -190,20 +189,6 @@ public final class TargetMatcher
                 Pattern classAnnotation,
                 Pattern memberAnnotation)
         {
-            this(type, included, owner, memberName, descriptor,
-                    classAnnotation, memberAnnotation, type == RuleType.CLASS);
-        }
-
-        private Rule(
-                RuleType type,
-                boolean included,
-                Pattern owner,
-                Pattern memberName,
-                Pattern descriptor,
-                Pattern classAnnotation,
-                Pattern memberAnnotation,
-                boolean declaresClass)
-        {
             this.type = type;
             this.included = included;
             this.owner = owner;
@@ -211,7 +196,6 @@ public final class TargetMatcher
             this.descriptor = descriptor;
             this.classAnnotation = classAnnotation;
             this.memberAnnotation = memberAnnotation;
-            this.declaresClass = declaresClass;
         }
 
         private static Rule parse(String input, boolean blockDecision)
@@ -373,8 +357,7 @@ public final class TargetMatcher
                     wildcardToPattern(name),
                     wildcardToPattern(readableTypeDescriptor(type)),
                     classClause.annotation(),
-                    memberAnnotation,
-                    hasClassClause);
+                    memberAnnotation);
         }
 
         private static Rule parseTypedMethod(
@@ -443,8 +426,7 @@ public final class TargetMatcher
                     wildcardToPattern(methodName),
                     wildcardToPattern(readableMethodDescriptor(arguments, returnType)),
                     classClause.annotation(),
-                    memberAnnotation,
-                    hasClassClause);
+                    memberAnnotation);
         }
 
         private static Rule parseLegacy(String raw, boolean included)
