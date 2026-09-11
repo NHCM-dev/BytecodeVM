@@ -122,8 +122,9 @@ public class BytecodeVM
 
             # Rules are evaluated from top to bottom. Repeat includes/excludes to re-include or
             # re-exclude a narrower target; the last matching rule wins.
-            # class: only selects classes; it does not implicitly select their fields or methods.
-            # Combine class: with field:/method: to constrain members to an owner context.
+            # class: is the class gate: excluded or unmatched classes are never processed.
+            # It does not select members; field:/method: must also select each target kind.
+            # A combined class:...;field:/method:... rule performs both decisions at once.
             # Member forms use normal Java types; '*' matches any text or descriptor fragment.
             # Run `inspect <config.yml>` to preview include matches and VM allocation.
             includes:

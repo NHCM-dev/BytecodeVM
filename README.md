@@ -589,10 +589,12 @@ When a group first appears in an `includes` block, unmatched targets begin exclu
 appears in an `excludes` block, unmatched targets begin included. Supplying any matching block in a
 configuration replaces the default matching chain.
 
-Each rule contains one `class:`, `field:`, or `method:` clause. A standalone `class:` rule selects
-only the class itself; it never implicitly selects the class's fields or methods. To select members
-within a class context, combine `class:` with one `field:` or `method:` clause using `;`; both clauses
-must then match. Member clauses without `class:` may carry their own owner pattern.
+Each rule contains one `class:`, `field:`, or `method:` clause. In the `all` group, `class:` is a hard
+class gate: a class must be included before any of its members can be processed, and excluding a
+class rejects every field and method inside it. A standalone `class:` rule does not select members;
+`field:` or `method:` must also select the target kind. Combining `class:` with one member clause
+using `;` performs both decisions in one rule. Member clauses without `class:` may carry their own
+owner pattern, but still require a separate matching class declaration in the `all` group.
 
 ```yaml
 includes:
@@ -618,9 +620,10 @@ excludes:
   dynamicStateKey: ["method:* hotLoop(*)*"]
 ```
 
-`all` controls which classes, fields, and methods are selected, but each target kind must be matched
-explicitly. Boolean option groups only scope an option that is globally enabled; a matching block
-does not turn on a globally disabled option.
+`all` controls which classes, fields, and methods are selected. Its class decision is always checked
+before its field or method decision, and each target kind must be matched explicitly. Boolean option
+groups only scope an option that is globally enabled; they may use member-only rules after `all` has
+admitted the class. A matching block does not turn on a globally disabled option.
 
 Supported boolean group names are:
 
@@ -634,7 +637,7 @@ descriptors, and wildcard descriptor fragments are accepted. The old space/comma
 
 | Expression | Effect |
 |---|---|
-| `class:*` | Match all classes only. It does not select any field or method. |
+| `class:*` | Admit all classes through the class gate. It does not select any field or method. |
 | `class:package.*` | Match classes in `package` and its subpackages. |
 | `class:@Virtualized *` | Match classes annotated with `@Virtualized`. |
 | `class:@com.example.Virtualized com.example.*` | Match annotated classes in `com.example`. |

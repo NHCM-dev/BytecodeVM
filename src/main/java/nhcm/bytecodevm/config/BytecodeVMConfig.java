@@ -810,15 +810,19 @@ public class BytecodeVMConfig
         public boolean statementMatches(String key, ClassNode owner, MethodNode method)
         {
             TargetMatcher matcher = matchers.get(key);
-            return matcher == null || matcher.methodDecision(owner, method)
-                    .orElse(defaults.getOrDefault(key, true));
+            return matcher == null || memberMatches(
+                    key,
+                    matcher.classDecision(owner),
+                    matcher.methodDecision(owner, method));
         }
 
         public boolean statementMatches(String key, ClassNode owner, org.objectweb.asm.tree.FieldNode field)
         {
             TargetMatcher matcher = matchers.get(key);
-            return matcher == null || matcher.fieldDecision(owner, field)
-                    .orElse(defaults.getOrDefault(key, true));
+            return matcher == null || memberMatches(
+                    key,
+                    matcher.classDecision(owner),
+                    matcher.fieldDecision(owner, field));
         }
 
         public boolean statementMatches(String key, ClassNode owner)
@@ -835,8 +839,10 @@ public class BytecodeVMConfig
             {
                 return false;
             }
-            TargetMatcher.MatchResult decision = matcher.fieldDecision(owner, field);
-            return decision.matched() && !decision.included();
+            return memberExcluded(
+                    key,
+                    matcher.classDecision(owner),
+                    matcher.fieldDecision(owner, field));
         }
 
         public boolean classExcluded(String key, ClassNode owner)
@@ -857,8 +863,38 @@ public class BytecodeVMConfig
             {
                 return false;
             }
-            TargetMatcher.MatchResult decision = matcher.methodDecision(owner, method);
-            return decision.matched() && !decision.included();
+            return memberExcluded(
+                    key,
+                    matcher.classDecision(owner),
+                    matcher.methodDecision(owner, method));
+        }
+
+        private boolean memberMatches(
+                String key,
+                TargetMatcher.MatchResult classDecision,
+                TargetMatcher.MatchResult memberDecision)
+        {
+            boolean fallback = defaults.getOrDefault(key, true);
+            boolean classAllowed = classDecision.matched()
+                    ? classDecision.included()
+                    : !"all".equals(key) || fallback;
+            return classAllowed && memberDecision.orElse(fallback);
+        }
+
+        private boolean memberExcluded(
+                String key,
+                TargetMatcher.MatchResult classDecision,
+                TargetMatcher.MatchResult memberDecision)
+        {
+            if (classDecision.matched() && !classDecision.included())
+            {
+                return true;
+            }
+            if ("all".equals(key) && !classDecision.orElse(defaults.getOrDefault(key, true)))
+            {
+                return true;
+            }
+            return memberDecision.matched() && !memberDecision.included();
         }
 
         private static Map<String, String[]> arrays(Map<String, List<String>> source)
